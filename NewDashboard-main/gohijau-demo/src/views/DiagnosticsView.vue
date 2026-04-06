@@ -18,7 +18,9 @@
             <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
             <span class="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
           </span>
-          <span :class="isRunning ? 'text-green-400' : 'text-gray-400'">{{ isRunning ? 'Receiving Data...' : 'Idle' }}</span>
+          <span :class="isRunning ? 'text-green-400' : 'text-gray-400'">
+            {{ isRunning ? 'Receiving Data...' : 'Idle' }}
+          </span>
         </span>
       </div>
       
@@ -26,7 +28,7 @@
         <div v-if="logs.length === 0" class="text-gray-500 italic">Waiting for machine startup sequence...</div>
         
         <div v-for="(log, index) in logs" :key="index" class="flex gap-4">
-          <span class="text-gray-500 whitespace-nowrap">[{{ new Date(log.timestamp).toLocaleTimeString() }}]</span>
+          <span class="text-gray-500 whitespace-nowrap">[{{ formatTime(log.timestamp) }}]</span>
           <span class="w-32 font-bold text-blue-400">[{{ log.step }}]</span>
           
           <span class="w-24" :class="getStatusColor(log.status)">{{ log.status }}</span>
@@ -38,24 +40,76 @@
 </template>
 
 <script setup>
-import { ref, nextTick } from 'vue';
+import { ref, nextTick, onMounted, onUnmounted } from 'vue';
+import * as signalR from '@microsoft/signalr';
 import DashboardLayout from '@/layouts/dashboard_template.vue';
 import Card from '@/components/Card.vue';
 
 const logs = ref([]);
 const isRunning = ref(false);
+let connection = null;
+
+const formatTime = (timestamp) => {
+  // Handles both Python floats (seconds) and JS integers (milliseconds)
+  const date = new Date(timestamp > 9999999999 ? timestamp : timestamp * 1000);
+  return date.toLocaleTimeString();
+};
 
 const getStatusColor = (status) => {
   switch(status) {
     case 'IN_PROGRESS': return 'text-yellow-400 animate-pulse';
     case 'PASSED': return 'text-green-400 font-bold';
     case 'FAILED': return 'text-red-500 font-bold';
+    case 'ERROR': return 'text-red-500 font-bold';
     case 'COMPLETED': return 'text-blue-400 font-bold';
     default: return 'text-gray-400';
   }
 };
 
-// MOCK: Simulates the live incoming data from the Python script
+// ==========================================
+// LIVE SIGNALR CONNECTION
+// ==========================================
+onMounted(async () => {
+  // Connect to your C# Hub URL
+  connection = new signalR.HubConnectionBuilder()
+    .withUrl("http://localhost:5137/machineHub")
+    .withAutomaticReconnect()
+    .build();
+
+  // Listen for the broadcast from Program.cs
+  connection.on("ReceiveDiagnosticLog", (log) => {
+    isRunning.value = true;
+    logs.value.push(log);
+    scrollToBottom();
+    
+    if (log.status === 'COMPLETED' || log.status === 'ERROR') {
+      isRunning.value = false;
+    }
+  });
+
+  try {
+    await connection.start();
+    console.log("✅ Connected to Diagnostic Hub");
+  } catch (err) {
+    console.error("❌ SignalR Connection Error: ", err);
+  }
+});
+
+onUnmounted(() => {
+  if (connection) {
+    connection.stop();
+  }
+});
+
+const scrollToBottom = async () => {
+  await nextTick();
+  const terminal = document.getElementById('terminal-window');
+  if (terminal) terminal.scrollTop = terminal.scrollHeight;
+};
+
+// ==========================================
+// DEMO SIMULATION (For Testing)
+// ==========================================
 const simulateLiveDiagnostics = () => {
   if (isRunning.value) return;
   
@@ -81,11 +135,5 @@ const simulateLiveDiagnostics = () => {
       if(item.status === 'COMPLETED') isRunning.value = false;
     }, item.delay);
   });
-};
-
-const scrollToBottom = async () => {
-  await nextTick();
-  const terminal = document.getElementById('terminal-window');
-  if (terminal) terminal.scrollTop = terminal.scrollHeight;
 };
 </script>
