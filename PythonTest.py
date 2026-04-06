@@ -119,8 +119,9 @@ FINAL_SUBMIT_URL = "https://services.gohijau.org/api/Qr/complete/pouring"
 AUDIT_CREATE_URL = "https://services.gohijau.org/api/audit/machine/create"
 FINAL_COLLECTOR_SUBMIT_URL = "https://services.gohijau.org/api/Qr/complete/collection"
 OVERFLOW_URL = "https://services.gohijau.org/api/Qr/overflow"
-TELEMETRY_URL = "https://services.gohijau.org/api/machine/telemetry" # NEW: Telemetry Dashboard Endpoint
-DIAGNOSTICS_URL = "https://services.gohijau.org/api/machine/diagnostics"
+# Change the real URLs to your local test environment
+TELEMETRY_URL = "http://localhost:5137/api/machine/telemetry"
+DIAGNOSTICS_URL = "http://localhost:5137/api/machine/diagnostics"
 
 TOKEN = None
 pin25_on = False  
@@ -223,7 +224,7 @@ def send_status_loop():
 # ------------------------------
 # SignalR Setup
 # ------------------------------
-hub_url = f"https://services.gohijau.org/machineHub?machineId={machine_id}"
+hub_url = f"http://localhost:5137/machineHub?machineId={machine_id}"
 hub_connection = (
     HubConnectionBuilder()
     .with_url(hub_url)

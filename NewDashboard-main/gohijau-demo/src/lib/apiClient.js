@@ -1,5 +1,5 @@
 // src/lib/apiClient.js
-const BASE_URL = 'https://services.gohijau.org';
+const BASE_URL = 'http://localhost:5137';
 
 export default {
   get: async (endpoint) => {
