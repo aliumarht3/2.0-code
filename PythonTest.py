@@ -50,27 +50,29 @@ class Watchdog:
 # SERIAL CONFIGURATION (MOCKED FOR UI TESTING)
 # ------------------------------
 class DummySerial:
-    def __init__(self): self.in_waiting = False
+    def __init__(self): 
+        self.in_waiting = False
+        self.last_command = ""
+        
     def flushInput(self): pass
     def reset_input_buffer(self): pass
-    def write(self, data): pass
-    def readline(self): return b"door_closed" # <-- Added a default reply so the door tests pass
+    
+    def write(self, data): 
+        # Store the command so we know what to reply to
+        self.last_command = data.decode(errors='ignore').strip()
+        self.in_waiting = True 
+        
+    def readline(self): 
+        self.in_waiting = False
+        # If asked about PSU, return a healthy voltage string
+        if self.last_command == "check_psu":
+            return b"PSU:OK,12.05V,5.01V\n"
+        # Default reply for door locks and everything else
+        return b"door_closed\n"
+        
     def close(self): pass
-    def flush(self): pass # <-- The missing piece!
+    def flush(self): pass
 
-# Use dummy connections instead
-mega_ser = DummySerial()
-uno_ser = DummySerial()
-
-uno_lock = threading.Lock()
-time.sleep(1) # Fake boot delay
-
-# Use dummy connections instead
-mega_ser = DummySerial()
-uno_ser = DummySerial()
-
-uno_lock = threading.Lock()
-time.sleep(1) # Fake boot delay
 
 # ------------------------------
 # AUTO TARE AT PROGRAM STARTUP
@@ -118,9 +120,7 @@ AUDIT_CREATE_URL = "https://services.gohijau.org/api/audit/machine/create"
 FINAL_COLLECTOR_SUBMIT_URL = "https://services.gohijau.org/api/Qr/complete/collection"
 OVERFLOW_URL = "https://services.gohijau.org/api/Qr/overflow"
 TELEMETRY_URL = "https://services.gohijau.org/api/machine/telemetry" # NEW: Telemetry Dashboard Endpoint
-# DIAGNOSTICS_URL = "https://services.gohijau.org/api/machine/diagnostics" # NEW: Startup Diagnostics Endpoint
-# Temporary for testing
-DIAGNOSTICS_URL = "https://webhook.site/9dec5e53-154d-402a-befe-e7be0a25cd66"
+DIAGNOSTICS_URL = "https://services.gohijau.org/api/machine/diagnostics"
 
 TOKEN = None
 pin25_on = False  
