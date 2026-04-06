@@ -1027,11 +1027,16 @@ def run_startup_diagnostics():
             "status": status,
             "detail": detail
         }
-        # Fire and forget - send to dashboard
-        try:
-            threading.Thread(target=requests.post, args=(DIAGNOSTICS_URL,), kwargs={'json': payload, 'timeout': 3}, daemon=True).start()
-        except:
-            pass 
+        
+        # NEW: Explicitly print the server's response or error
+        def send_log_to_api():
+            try:
+                res = requests.post(DIAGNOSTICS_URL, json=payload, timeout=3)
+                print(f"   [API] Log sent! Server replied: {res.status_code}")
+            except Exception as e:
+                print(f"   [API ERROR] Could not reach server: {e}")
+
+        threading.Thread(target=send_log_to_api, daemon=True).start()
             
     report("System Check", "IN_PROGRESS", "Initializing startup sequence...")
     time.sleep(1)
