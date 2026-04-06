@@ -73,6 +73,25 @@ class DummySerial:
     def close(self): pass
     def flush(self): pass
 
+# ------------------------------
+# HARDWARE INITIALIZATION (FIXED)
+# ------------------------------
+uno_lock = threading.Lock()
+
+# Global timers required by the collector loop
+auto_off_timer = None
+door_off_timer = None
+
+try:
+    # IMPORTANT: Update these COM ports to match your machine!
+    uno_ser = serial.Serial('COM3', 9600, timeout=1) 
+    mega_ser = serial.Serial('COM4', 9600, timeout=1)
+    print("✅ Serial connected successfully.")
+except serial.SerialException as e:
+    print(f"⚠️ Serial connection error: {e}")
+    print("⚠️ Falling back to DummySerial for testing...")
+    uno_ser = DummySerial()
+    mega_ser = DummySerial()
 
 # ------------------------------
 # AUTO TARE AT PROGRAM STARTUP
@@ -262,6 +281,7 @@ def on_close():
 def on_collector_end():
     print("[SERVER] CollectorEnd received. Stopping machine...")
     send_to_arduino("PIN25_OFF")
+    global pin25_on
     pin25_on = False
     try:
         payload = {"token": TOKEN, "machineId":machine_id}
@@ -398,7 +418,6 @@ def create_machine_overflow(payload):
 def wait_for_qr():
     print("📷 Waiting for QR scan...")
     
-    import sys
     if sys.platform == 'win32':
         # --- WINDOWS TESTING MODE ---
         import msvcrt
@@ -411,29 +430,40 @@ def wait_for_qr():
                 if char in ('\r', '\n'): # Enter key pressed
                     print()
                     if scanned_str:
-                        payload = {"qrToken": TOKEN, "machineId": machine_id, "action": "QR Scanned."}
-                        create_machine_audit(payload)
+                        # You can create audit here if needed, but since we update global TOKEN later,
+                        # it's better to return the string so main() can process it.
                         return scanned_str
                 else:
                     scanned_str += char
             time.sleep(0.1)
     else:
         # --- LINUX / PRODUCTION MODE ---
-        import select
         while True:
             wd.kick()
             readable, _, _ = select.select([sys.stdin], [], [], 1)
             if readable:
                 scanned = sys.stdin.readline().strip()
                 if scanned:
-                    payload = {
-                        "qrToken": TOKEN,
-                        "machineId": machine_id,
-                        "action": "QR Scanned."
-                    }
-                    create_machine_audit(payload)
                     return scanned
             time.sleep(0.1)
+
+# ------------------------------
+# SEND QR TO API (FIXED)
+# ------------------------------
+def send_qr_to_api(qr_token):
+    """Validates the QR token with the backend and returns the panel type."""
+    try:
+        response = requests.post(QR_VALIDATE_URL, json={"token": qr_token}, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            # Returns CUSTOMERPANEL, COLLECTORPANEL, or TECHNICIANPANEL
+            print(f"✅ QR Validated. Panel: {data.get('panelType', 'UNKNOWN')}")
+            return data.get("panelType") 
+        else:
+            print(f"❌ QR Validation failed: {response.status_code} - {response.text}")
+    except Exception as e:
+        print(f"❌ API Error during QR validation: {e}")
+    return None
 
 # ------------------------------
 # FINAL DATA SUBMIT
@@ -841,7 +871,7 @@ def customer_cycle():
                     return
 
                 # ------------------------------
-                # NEW: TURBIDITY GATEKEEPING & TELEMETRY
+                # NORMAL PUMP START WITH TURBIDITY CHECK
                 # ------------------------------
                 print("🔍 Checking oil quality (Turbidity) and gathering telemetry...")
                 telemetry = get_telemetry_from_arduino()
@@ -1060,7 +1090,7 @@ def run_startup_diagnostics():
 # Main Program
 # ------------------------------
 def main():
-    global pin25_on, wd
+    global pin25_on, wd, TOKEN # <-- FIXED: Add global TOKEN
     def pre_restart():
         try: send_to_arduino("LOCK")
         except: pass
@@ -1069,13 +1099,19 @@ def main():
     threading.Thread(target=internet_monitor_loop, daemon=True).start()
     threading.Thread(target=global_auto_drain_monitor, daemon=True).start()
 
-# --- NEW: Run diagnostics before opening for business ---
+    # --- NEW: Run diagnostics before opening for business ---
     run_startup_diagnostics()
 
     while True:
         wd.kick()
-        token = wait_for_qr()
-        panel_type = send_qr_to_api(token)
+        # Ensure the returned scan updates the global token for the audit APIs
+        TOKEN = wait_for_qr() 
+        
+        # FIXED: Create audit events and log QR based on API response
+        payload = {"qrToken": TOKEN, "machineId": machine_id, "action": "QR Scanned."}
+        create_machine_audit(payload)
+        
+        panel_type = send_qr_to_api(TOKEN)
         if not panel_type:
             continue
 
@@ -1118,5 +1154,8 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         print("\n🛑 Program stopped by user.")
-        mega_ser.close()
-        uno_ser.close()
+        try:
+            mega_ser.close()
+            uno_ser.close()
+        except:
+            pass

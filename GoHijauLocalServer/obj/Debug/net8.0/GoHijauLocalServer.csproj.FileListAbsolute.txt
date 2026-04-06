@@ -24,3 +24,5 @@ C:\Users\alium\OneDrive\Desktop\School_Stuff\Intern\GoHijau\2.0 code\GoHijauLoca
 C:\Users\alium\OneDrive\Desktop\School_Stuff\Intern\GoHijau\2.0 code\GoHijauLocalServer\obj\Debug\net8.0\GoHijauLocalServer.pdb
 C:\Users\alium\OneDrive\Desktop\School_Stuff\Intern\GoHijau\2.0 code\GoHijauLocalServer\obj\Debug\net8.0\GoHijauLocalServer.genruntimeconfig.cache
 C:\Users\alium\OneDrive\Desktop\School_Stuff\Intern\GoHijau\2.0 code\GoHijauLocalServer\obj\Debug\net8.0\ref\GoHijauLocalServer.dll
+C:\Users\alium\OneDrive\Desktop\School_Stuff\Intern\GoHijau\2.0 code\GoHijauLocalServer\bin\Debug\net8.0\package-lock.json
+C:\Users\alium\OneDrive\Desktop\School_Stuff\Intern\GoHijau\2.0 code\GoHijauLocalServer\bin\Debug\net8.0\package.json
