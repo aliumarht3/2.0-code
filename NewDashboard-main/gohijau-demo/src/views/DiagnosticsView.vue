@@ -77,7 +77,7 @@ onMounted(async () => {
     .build();
 
   // Listen for the broadcast from Program.cs
-  connection.on("ReceiveDiagnosticLog", (log) => {
+  connection.on("ReceiveDiagnostic", (log) => {
     isRunning.value = true;
     logs.value.push(log);
     scrollToBottom();

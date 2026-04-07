@@ -6,9 +6,14 @@ using System.Collections.Concurrent;
 var builder = WebApplication.CreateBuilder(args);
 
 // 1. Allow your Vue dashboard to communicate with this server
-builder.Services.AddCors(options => {
-    options.AddDefaultPolicy(policy => {
-        policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod();
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowVueDashboard", builder =>
+    {
+        builder.WithOrigins("http://localhost:5174") // MUST MATCH YOUR VUE PORT
+               .AllowAnyHeader()
+               .AllowAnyMethod()
+               .AllowCredentials(); // CRITICAL for SignalR
     });
 });
 
@@ -20,6 +25,8 @@ app.UseCors();
 
 // 3. In-memory fake database
 var machines = new ConcurrentDictionary<string, MachineTelemetry>();
+
+app.UseCors("AllowVueDashboard");
 
 // 4. SignalR Hub Mapping
 app.MapHub<MachineHub>("/machineHub");
