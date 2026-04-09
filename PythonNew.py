@@ -84,8 +84,8 @@ door_off_timer = None
 
 try:
     # IMPORTANT: Update these COM ports to match your machine!
-    uno_ser = serial.Serial('COM3', 9600, timeout=1) 
-    mega_ser = serial.Serial('COM4', 9600, timeout=1)
+    uno_ser = serial.Serial('/dev/ttyACM1', 9600, timeout=1) 
+    mega_ser = serial.Serial('/dev/ttyACM0', 9600, timeout=1)
     print("✅ Serial connected successfully.")
 except serial.SerialException as e:
     print(f"⚠️ Serial connection error: {e}")
