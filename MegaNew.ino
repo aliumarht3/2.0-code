@@ -69,13 +69,6 @@ void keepLedRed() {
   }
 }
 
-void forceRedWhileWaiting() {
-  if (waitingForPump) {
-    digitalWrite(RED_LED, HIGH);
-    digitalWrite(GREEN_LED, LOW);
-  }
-}
-
 // -----------------------------
 // Setup
 // -----------------------------

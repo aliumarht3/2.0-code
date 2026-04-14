@@ -27,9 +27,6 @@ class Watchdog:
     def kick(self):
         self.last_kick = time.time()
 
-    def stop(self):
-        self.active = False
-
     def _monitor(self):
         while self.active:
             if time.time() - self.last_kick > self.timeout:
