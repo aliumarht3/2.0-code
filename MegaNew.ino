@@ -92,8 +92,9 @@ void setup() {
   pinMode(PUMP_GPIO2, OUTPUT);
   pinMode(DOOR_LOCK_2, OUTPUT);
   pinMode(DOOR_LOCK_3, OUTPUT);
-  pinMode(DIVERTER_RELAY, OUTPUT); // Init Diverter
+  pinMode(DIVERTER_RELAY, OUTPUT);
 
+  // Init Diverter
   // Normal LED logic
   digitalWrite(RED_LED, HIGH);     
   digitalWrite(GREEN_LED, LOW);    
@@ -113,7 +114,7 @@ void setup() {
 // -----------------------------
 void loop() {
   if (!pythonReady) {
-    digitalWrite(RED_LED, LOW);    
+    digitalWrite(RED_LED, LOW);
     digitalWrite(GREEN_LED, HIGH);   
     delay(200);
     if (Serial.available()) {
@@ -199,7 +200,7 @@ void loop() {
       else Serial.println("CHECK_DOOR_GPIO3:OPEN");
     }
 
-    // ✅ Python LED control commands
+    // Python LED control commands
     else if (command == "LED_GREEN_ON") {
       digitalWrite(RED_LED, HIGH);
       digitalWrite(GREEN_LED, LOW);
@@ -321,7 +322,7 @@ void loop() {
   }
 
   // =============================================================
-  // 🧠 Global Overflow Logic (Includes Junk Tank)
+  // Global Overflow Logic (Includes Junk Tank)
   // =============================================================
   static int overflowCount = 0;
   const int requiredSamples = 10; 
@@ -367,11 +368,9 @@ void loop() {
     smallDist = ultrasonicSmall.ping_cm();
     resDist   = ultrasonicRes.ping_cm();
     junkDist  = ultrasonicJunk.ping_cm();
-
     bool stillOverflow = ((smallDist > 0 && smallDist <= SMALL_TANK_THRESHOLD) ||
                           (resDist > 0 && resDist <= RESERVOIR_HIGH_HIGH) ||
                           (junkDist > 0 && junkDist <= JUNK_TANK_THRESHOLD));
-
     if (stillOverflow) {
       globalOverflowDetected = true;
       digitalWrite(RED_LED, LOW);
@@ -398,7 +397,7 @@ void loop() {
     }
   }
 
-  // 3️⃣ Customer door logic
+  // Customer door logic
   if (pouringActive) {
     if (smallDist > 0 && smallDist <= SMALL_TANK_THRESHOLD) {
       Serial.println("overflow_small_tank");
