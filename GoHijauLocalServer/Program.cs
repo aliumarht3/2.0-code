@@ -152,7 +152,14 @@ app.Run();
 // ==========================================
 // DATA MODELS & HUB
 // ==========================================
-public class MachineHub : Hub { }
+public class MachineHub : Hub 
+{ 
+    public async Task SendStatus(string machineId, string status)
+    {
+        // This accepts the 5-second ping from Python and prevents the unhandled error
+        await Clients.All.SendAsync("MachineStatusUpdate", machineId, status);
+    }
+}
 
 public class IncomingPythonTelemetry {
     public string MachineId { get; set; }

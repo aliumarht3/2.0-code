@@ -1,5 +1,5 @@
-// LEVEL_FINAL_COMBINED.ino
-// GoHijau Smart Control — Normal LED + Global Ultrasonic + Turbidity & Junk Tank
+ // LEVEL_FINAL_COMBINED.ino
+// GoHijau Smart Control â Normal LED + Global Ultrasonic + Turbidity & Junk Tank + Diagnostics
 
 #include <NewPing.h>
 
@@ -53,7 +53,7 @@ bool ledBlinkState = false;
 unsigned long lastBlinkTime = 0;
 const unsigned long blinkInterval = 500;
 bool overflowActive = false;  
-bool globalOverflowDetected = false; 
+bool globalOverflowDetected = false;
 bool waitingForPump = false;
 unsigned long ledFreezeUntil = 0;
 bool technicianMode = false;
@@ -104,7 +104,7 @@ void setup() {
   digitalWrite(DOOR_LOCK_3, HIGH);
   digitalWrite(DIVERTER_RELAY, LOW); 
 
-  Serial.println("=== GoHijau LEVEL_FINAL_COMBINED — Advanced Sensors ===");
+  Serial.println("=== GoHijau LEVEL_FINAL_COMBINED â Advanced Sensors + Diagnostics ===");
   Serial.println("=== Waiting for Python Ready signal ===");
 }
 
@@ -116,15 +116,14 @@ void loop() {
     digitalWrite(RED_LED, LOW);    
     digitalWrite(GREEN_LED, HIGH);   
     delay(200);
-    
     if (Serial.available()) {
       String cmd = Serial.readStringUntil('\n');
       cmd.trim();
       if (cmd == "PYTHON_READY") {
         pythonReady = true;
         Serial.println("PYTHON_READY_ACK");
-        digitalWrite(RED_LED, LOW);
-        digitalWrite(GREEN_LED, HIGH);
+        digitalWrite(RED_LED, HIGH);
+        digitalWrite(GREEN_LED, LOW);
       }
     }
     return; 
@@ -141,8 +140,8 @@ void loop() {
         continue;   
     }
 
-    // --- NEW: Telemetry Request from Python ---
-    if (command == "get_telemetry") {
+    // --- Telemetry Request from Python ---
+    else if (command == "get_telemetry") {
         int turbValue = analogRead(TURBIDITY_PIN);
         float junkDist = ultrasonicJunk.ping_cm();
         float resDist = ultrasonicRes.ping_cm();
@@ -154,7 +153,49 @@ void loop() {
         continue;
     }
 
-    if (command == "LED_GREEN_ON") {
+    // ------------------------------------
+    // HARDWARE STARTUP DIAGNOSIS COMMANDS
+    // ------------------------------------
+    else if (command == "CHECK_ULTRASONIC_SMALL") {
+      float smallDist = ultrasonicSmall.ping_cm();
+      if (smallDist == 0) {
+        Serial.println("CHECK_ULTRASONIC_SMALL:NO_READING");
+      } else if (smallDist <= SMALL_TANK_THRESHOLD) {
+        Serial.println("CHECK_ULTRASONIC_SMALL:OVERFLOW");
+      } else {
+        Serial.println("CHECK_ULTRASONIC_SMALL:OK");
+      }
+    }
+    else if (command == "CHECK_ULTRASONIC_RES") {
+      float resDist = ultrasonicRes.ping_cm();
+      if (resDist == 0) {
+        Serial.println("CHECK_ULTRASONIC_RES:NO_READING");
+      } else if (resDist <= RESERVOIR_HIGH_HIGH) {
+        Serial.println("CHECK_ULTRASONIC_RES:HIGH_HIGH");
+      } else if (resDist <= RESERVOIR_HIGH) {
+        Serial.println("CHECK_ULTRASONIC_RES:HIGH");
+      } else {
+        Serial.println("CHECK_ULTRASONIC_RES:OK");
+      }
+    }
+    else if (command == "CHECK_ULTRASONIC_JUNK") {
+      float junkDist = ultrasonicJunk.ping_cm();
+      if (junkDist == 0) {
+        Serial.println("CHECK_ULTRASONIC_JUNK:NO_READING");
+      } else if (junkDist <= JUNK_TANK_THRESHOLD) {
+        Serial.println("CHECK_ULTRASONIC_JUNK:OVERFLOW");
+      } else {
+        Serial.println("CHECK_ULTRASONIC_JUNK:OK");
+      }
+    }
+    else if (command == "CHECK_DOOR_GPIO2") {
+      int raw = digitalRead(DOOR_SENSOR_GPIO2);
+      if (raw == LOW) Serial.println("CHECK_DOOR_GPIO2:CLOSED");
+      else Serial.println("CHECK_DOOR_GPIO2:OPEN");
+    }
+
+    // â Python LED control commands
+    else if (command == "LED_GREEN_ON") {
       digitalWrite(RED_LED, HIGH);
       digitalWrite(GREEN_LED, LOW);
       Serial.println("LED_GREEN_ON_ACK");
@@ -164,7 +205,8 @@ void loop() {
       Serial.println("LED_GREEN_OFF_ACK");
     }
 
-    if (command == "unlock" || command == "unlock_left") {
+    // Door Unlock Commands
+    else if (command == "unlock" || command == "unlock_left") {
       digitalWrite(DOOR_LOCK, LOW);
       digitalWrite(RED_LED, LOW);
       digitalWrite(GREEN_LED, HIGH);
@@ -191,6 +233,8 @@ void loop() {
       doorOpenedSinceUnlock = false;
       cycleActive = true;
     }
+    
+    // Lock / Stop Commands
     else if (command == "LOCK") {
       digitalWrite(PUMP_RELAY, LOW);
       digitalWrite(DIVERTER_RELAY, LOW); // Safe shutdown for diverter
@@ -209,7 +253,7 @@ void loop() {
       digitalWrite(PUMP_GPIO2, HIGH);
       digitalWrite(DOOR_LOCK_2, LOW);
       collectorModeActive = true;
-      Serial.println("✅ Pin 25 ON");
+      Serial.println("â Pin 25 ON");
     }
     else if (command == "excess_pump_start") {
       digitalWrite(PUMP_RELAY, HIGH);
@@ -219,7 +263,8 @@ void loop() {
       digitalWrite(PUMP_RELAY, LOW);
       Serial.println("excess_pump_stoped");
     }
-    // --- NEW: Divert Command ---
+    
+    // --- Divert Command ---
     else if (command == "divert_to_junk") {
       digitalWrite(DIVERTER_RELAY, HIGH); // Activate junk routing
       digitalWrite(PUMP_RELAY, HIGH);     // Turn on pump
@@ -229,6 +274,7 @@ void loop() {
       digitalWrite(RED_LED, LOW);
       Serial.println("diverting_to_junk");
     }
+    
     else if (command == "COLLECTOR_DOOR_OFF") {
       digitalWrite(DOOR_LOCK_2, HIGH);
       Serial.println("DOOR OFF");
@@ -239,7 +285,7 @@ void loop() {
       collectorModeActive = false;
       digitalWrite(RED_LED, LOW);
       digitalWrite(GREEN_LED, LOW);
-      Serial.println("✅ Pin 25 OFF");
+      Serial.println("â Pin 25 OFF");
     }
     else if (command == "get_led_status") {
       if (digitalRead(RED_LED) == LOW && digitalRead(GREEN_LED) == HIGH)
@@ -270,7 +316,7 @@ void loop() {
   }
 
   // =============================================================
-  // 🧠 Global Overflow Logic (Now includes Junk Tank)
+  // ð§  Global Overflow Logic (Includes Junk Tank)
   // =============================================================
   static int overflowCount = 0;
   const int requiredSamples = 10; 
@@ -279,7 +325,7 @@ void loop() {
 
   float smallDist = ultrasonicSmall.ping_cm();
   float resDist   = ultrasonicRes.ping_cm();
-  float junkDist  = ultrasonicJunk.ping_cm(); // Check junk tank
+  float junkDist  = ultrasonicJunk.ping_cm();
 
   // OVERFLOW if any of the three tanks hit their limit
   bool overflowNow = ((smallDist > 0 && smallDist <= SMALL_TANK_THRESHOLD) ||
@@ -305,15 +351,14 @@ void loop() {
   bool collectorActive = (digitalRead(PUMP_GPIO2) == HIGH);
 
   if (collectorActive && !collectorCheckPending && globalOverflowDetected) {
-    digitalWrite(RED_LED, HIGH);  
+    digitalWrite(RED_LED, HIGH);
     digitalWrite(GREEN_LED, LOW); 
     collectorStartTime = millis();
     collectorCheckPending = true;
   }
 
   if (collectorActive && collectorCheckPending && millis() - collectorStartTime >= 5000UL) {
-    collectorCheckPending = false; 
-
+    collectorCheckPending = false;
     smallDist = ultrasonicSmall.ping_cm();
     resDist   = ultrasonicRes.ping_cm();
     junkDist  = ultrasonicJunk.ping_cm();
@@ -348,7 +393,7 @@ void loop() {
     }
   }
 
-  // 3️⃣ Customer door logic
+  // 3ï¸â£ Customer door logic
   if (pouringActive) {
     if (smallDist > 0 && smallDist <= SMALL_TANK_THRESHOLD) {
       Serial.println("overflow_small_tank");
@@ -393,7 +438,6 @@ void loop() {
           const unsigned long maxWait = 10000; 
           
           bool pumpStarted = false;
-
           while (millis() - waitStart < maxWait) {
             if (Serial.available()) {
               String cmd = Serial.readStringUntil('\n');
@@ -425,7 +469,7 @@ void loop() {
           }
 
           if (!pumpStarted) {
-            Serial.println("⚠️ No pump_now received — auto-starting after timeout.");
+            Serial.println("â ï¸ No pump_now received â auto-starting after timeout.");
             Serial.println("start_transfer");
             digitalWrite(PUMP_RELAY, HIGH);
             transferInProgress = true;
@@ -461,7 +505,7 @@ void lockDoor() {
   digitalWrite(DOOR_LOCK, HIGH);
   digitalWrite(DOOR_LOCK_2, HIGH);
   digitalWrite(DOOR_LOCK_3, HIGH);
-  digitalWrite(DIVERTER_RELAY, LOW); 
+  digitalWrite(DIVERTER_RELAY, LOW);
   digitalWrite(GREEN_LED, LOW);
   digitalWrite(RED_LED, HIGH);
 }
@@ -483,12 +527,11 @@ void lockDoor2() {
 
 void updateDoorIndicator() {
   if (cycleActive || collectorModeActive || waitingForPump) return;
-
   bool topDoorClosed   = (digitalRead(DOOR_SENSOR_TOP) == LOW);
   bool rightDoorClosed = (digitalRead(DOOR_SENSOR_GPIO2) == LOW);
-  bool techDoorClosed  = (digitalRead(DOOR_SENSOR_GPIO3) == LOW);
+  //bool techDoorClosed  = (digitalRead(DOOR_SENSOR_GPIO3) == LOW);
 
-  if (!topDoorClosed || !rightDoorClosed || !techDoorClosed) {
+  if (!topDoorClosed || !rightDoorClosed) {
     digitalWrite(GREEN_LED, HIGH);
     digitalWrite(RED_LED, LOW);
   } 
