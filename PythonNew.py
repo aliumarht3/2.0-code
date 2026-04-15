@@ -251,9 +251,10 @@ def publish_manual_test_status(test_name, status):
 def run_online_diagnostics(tared_status=True):
     print("\n--- 🌐 STARTED ONLINE DIAGNOSTICS ---")
     
-    # Define structure mapping matching the Vue frontend
+    # 1. Define structure mapping matching the Vue frontend
+    # WARNING: The "comp" names here MUST perfectly match the names in the actual tests below!
     tests = [
-        {"no": 1, "comp": "WiFi Connectivity", "chk": "WiFi connection status"},
+        {"no": 1, "comp": "Has WiFi?", "chk": "Connecting to 8.8.8.8:53"},
         {"no": 2, "comp": "Weighing Tank (Ultrasonic)", "chk": "Object depth / Ultrasonic reading"},
         {"no": 3, "comp": "Weighing Tank (Load Cell)", "chk": "Weight / Load cell reading"},
         {"no": 4, "comp": "Barrel", "chk": "Storage level / Ultrasonic reading"},
@@ -261,45 +262,74 @@ def run_online_diagnostics(tared_status=True):
         {"no": 6, "comp": "Door Sensors", "chk": "Relay input / Security status"}
     ]
 
-    # Notify UI that tests are running
+    # 2. Notify UI that tests are starting (This renders the IN_PROGRESS spinners)
     for test in tests:
         update_diagnostic_status(test["no"], "Online", test["comp"], test["chk"], "IN_PROGRESS")
         time.sleep(0.1)
 
-    # 1. WiFi
-    status_wifi = "☑" if internet_available else "X"
-    update_diagnostic_status(1, "Online", "WiFi Connectivity", "WiFi connection status", status_wifi)
+    # ---------------------------------------------------------
+    # ACTUAL HARDWARE & NETWORK TESTS
+    # ---------------------------------------------------------
+
+    # 1. WiFi Test (Using reliable Python sockets)
+    try:
+        socket.setdefaulttimeout(3)
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("8.8.8.8", 53))
+        update_diagnostic_status(1, "Online", "Has WiFi?", "Connected", "☑")
+    except Exception as e:
+        update_diagnostic_status(1, "Online", "Has WiFi?", f"Error: {e}", "X")
+
     time.sleep(0.5)
 
     # 2. Ultrasonic (Weighing)
-    us_small = send_to_arduino("CHECK_ULTRASONIC_SMALL")
-    status_us_small = "☑" if us_small and "OK" in str(us_small) else "X"
-    update_diagnostic_status(2, "Online", "Weighing Tank (Ultrasonic)", "Object depth / Ultrasonic reading", status_us_small, f"US Reading: {us_small}" if status_us_small=="X" else "")
+    try:
+        us_small = send_to_arduino("CHECK_ULTRASONIC_SMALL")
+        status_us_small = "☑" if us_small and "OK" in str(us_small) else "X"
+        update_diagnostic_status(2, "Online", "Weighing Tank (Ultrasonic)", "Object depth / Ultrasonic reading", status_us_small, f"US Reading: {us_small}" if status_us_small=="X" else "")
+    except Exception as e:
+        update_diagnostic_status(2, "Online", "Weighing Tank (Ultrasonic)", f"Error: {e}", "X")
+
     time.sleep(0.5)
 
     # 3. Load Cell
-    status_lc = "☑" if tared_status else "X"
-    update_diagnostic_status(3, "Online", "Weighing Tank (Load Cell)", "Weight / Load cell reading", status_lc)
+    try:
+        status_lc = "☑" if tared_status else "X"
+        update_diagnostic_status(3, "Online", "Weighing Tank (Load Cell)", "Weight / Load cell reading", status_lc)
+    except Exception as e:
+        update_diagnostic_status(3, "Online", "Weighing Tank (Load Cell)", f"Error: {e}", "X")
+
     time.sleep(0.5)
 
     # 4. Barrel
-    us_res = send_to_arduino("CHECK_ULTRASONIC_RES")
-    status_us_res = "☑" if us_res and "OK" in str(us_res) else "X"
-    update_diagnostic_status(4, "Online", "Barrel", "Storage level / Ultrasonic reading", status_us_res, f"Barrel Reading: {us_res}" if status_us_res=="X" else "")
+    try:
+        us_res = send_to_arduino("CHECK_ULTRASONIC_RES")
+        status_us_res = "☑" if us_res and "OK" in str(us_res) else "X"
+        update_diagnostic_status(4, "Online", "Barrel", "Storage level / Ultrasonic reading", status_us_res, f"Barrel Reading: {us_res}" if status_us_res=="X" else "")
+    except Exception as e:
+        update_diagnostic_status(4, "Online", "Barrel", f"Error: {e}", "X")
+
     time.sleep(0.5)
 
     # 5. Filter #1 / Turbidity
-    telemetry = get_telemetry_from_arduino()
-    turbidity_val = telemetry.get('turbidity', 0)
-    status_filter = "☑" if turbidity_val < TURBIDITY_LIMIT else "X"
-    update_diagnostic_status(5, "Online", "Filter #1", "Flow & Turbidity status", status_filter, f"Turbidity Level: {turbidity_val}" if status_filter=="X" else "")
+    try:
+        telemetry = get_telemetry_from_arduino()
+        turbidity_val = telemetry.get('turbidity', 0)
+        TURBIDITY_LIMIT = 3000 # Make sure this matches your actual limit variable
+        status_filter = "☑" if turbidity_val < TURBIDITY_LIMIT else "X"
+        update_diagnostic_status(5, "Online", "Filter #1", "Flow & Turbidity status", status_filter, f"Turbidity Level: {turbidity_val}" if status_filter=="X" else "")
+    except Exception as e:
+        update_diagnostic_status(5, "Online", "Filter #1", f"Error: {e}", "X")
+
     time.sleep(0.5)
 
     # 6. Door Sensors
-    door_top = send_to_arduino("get_door_state")
-    door_2 = send_to_arduino("CHECK_DOOR_GPIO2")
-    doors_ok = ("door_closed" in str(door_top)) and ("CLOSED" in str(door_2))
-    update_diagnostic_status(6, "Online", "Door Sensors", "Relay input / Security status", "☑" if doors_ok else "X", "Check doors" if not doors_ok else "")
+    try:
+        door_top = send_to_arduino("get_door_state")
+        door_2 = send_to_arduino("CHECK_DOOR_GPIO2")
+        doors_ok = ("door_closed" in str(door_top)) and ("CLOSED" in str(door_2))
+        update_diagnostic_status(6, "Online", "Door Sensors", "Relay input / Security status", "☑" if doors_ok else "X", "Check doors" if not doors_ok else "")
+    except Exception as e:
+        update_diagnostic_status(6, "Online", "Door Sensors", f"Error: {e}", "X")
 
     print("--- ONLINE DIAGNOSTICS COMPLETE ---\n")
 
