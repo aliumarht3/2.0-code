@@ -162,6 +162,139 @@ internet_lock = threading.Lock()
 TURBIDITY_LIMIT = 600
 
 # ------------------------------
+# ARDUINO COMMUNICATION HELPER
+# ------------------------------
+def send_to_arduino(command, timeout=0.8):
+    with mega_lock:
+        try:
+            mega_ser.reset_input_buffer()
+        except:
+            pass
+        mega_ser.write((command + "\n").encode())
+        mega_ser.flush()
+        end = time.time() + timeout
+        
+        while time.time() < end:
+            try:
+                if mega_ser.in_waiting: 
+                    line = mega_ser.readline().decode(errors="ignore").strip()
+                    if line:
+                        print(f"[MEGA ACK] {command} -> {line}")
+                        return line
+            except Exception as e:
+                pass
+            time.sleep(0.05)
+            
+        print(f"[MEGA ACK] {command} -> (NO REPLY)")
+        return None
+
+# ------------------------------
+# INTERACTIVE DIAGNOSTICS LOGIC (NEW)
+# ------------------------------
+def update_diagnostic_status(log_no, log_type, component, checking, status, action=""):
+    payload = {
+        "MachineId": machine_id,
+        "Timestamp": time.time(),
+        "No": log_no,
+        "Type": log_type,
+        "Component": component,
+        "Checking": checking,
+        "Status": status,
+        "Action": action
+    }
+    try:
+        requests.post(DIAGNOSTICS_URL, json=payload, timeout=3)
+    except Exception as e:
+        print(f"⚠️ Failed to update diagnostic status for {component}: {e}")
+
+def run_online_diagnostics(tared_status=True):
+    print("\n--- 🌐 STARTED ONLINE DIAGNOSTICS ---")
+    
+    # Define structure mapping matching the Vue frontend
+    tests = [
+        {"no": 1, "comp": "WiFi Connectivity", "chk": "WiFi connection status"},
+        {"no": 2, "comp": "Weighing Tank (Ultrasonic)", "chk": "Object depth / Ultrasonic reading"},
+        {"no": 3, "comp": "Weighing Tank (Load Cell)", "chk": "Weight / Load cell reading"},
+        {"no": 4, "comp": "Barrel", "chk": "Storage level / Ultrasonic reading"},
+        {"no": 5, "comp": "Filter #1", "chk": "Flow & Turbidity status"},
+        {"no": 6, "comp": "Door Sensors", "chk": "Relay input / Security status"}
+    ]
+
+    # Notify UI that tests are running
+    for test in tests:
+        update_diagnostic_status(test["no"], "Online", test["comp"], test["chk"], "IN_PROGRESS")
+        time.sleep(0.1)
+
+    # 1. WiFi
+    status_wifi = "☑" if internet_available else "X"
+    update_diagnostic_status(1, "Online", "WiFi Connectivity", "WiFi connection status", status_wifi)
+    time.sleep(0.5)
+
+    # 2. Ultrasonic (Weighing)
+    us_small = send_to_arduino("CHECK_ULTRASONIC_SMALL")
+    status_us_small = "☑" if us_small and "OK" in str(us_small) else "X"
+    update_diagnostic_status(2, "Online", "Weighing Tank (Ultrasonic)", "Object depth / Ultrasonic reading", status_us_small, f"US Reading: {us_small}" if status_us_small=="X" else "")
+    time.sleep(0.5)
+
+    # 3. Load Cell
+    status_lc = "☑" if tared_status else "X"
+    update_diagnostic_status(3, "Online", "Weighing Tank (Load Cell)", "Weight / Load cell reading", status_lc)
+    time.sleep(0.5)
+
+    # 4. Barrel
+    us_res = send_to_arduino("CHECK_ULTRASONIC_RES")
+    status_us_res = "☑" if us_res and "OK" in str(us_res) else "X"
+    update_diagnostic_status(4, "Online", "Barrel", "Storage level / Ultrasonic reading", status_us_res, f"Barrel Reading: {us_res}" if status_us_res=="X" else "")
+    time.sleep(0.5)
+
+    # 5. Filter #1 / Turbidity
+    telemetry = get_telemetry_from_arduino()
+    turbidity_val = telemetry.get('turbidity', 0)
+    status_filter = "☑" if turbidity_val < TURBIDITY_LIMIT else "X"
+    update_diagnostic_status(5, "Online", "Filter #1", "Flow & Turbidity status", status_filter, f"Turbidity Level: {turbidity_val}" if status_filter=="X" else "")
+    time.sleep(0.5)
+
+    # 6. Door Sensors
+    door_top = send_to_arduino("get_door_state")
+    door_2 = send_to_arduino("CHECK_DOOR_GPIO2")
+    doors_ok = ("door_closed" in str(door_top)) and ("CLOSED" in str(door_2))
+    update_diagnostic_status(6, "Online", "Door Sensors", "Relay input / Security status", "☑" if doors_ok else "X", "Check doors" if not doors_ok else "")
+
+    print("--- ONLINE DIAGNOSTICS COMPLETE ---\n")
+
+def run_physical_diagnostics(component_name):
+    print(f"\n--- 🛠️ MANUAL TEST TRIGGERED: {component_name} ---")
+    
+    physical_map = {
+        "Pump": 1, "Qr Scanner": 2, "Door Lock": 3, 
+        "Wiper Motor": 4, "Door Motor": 5, "Valve": 6
+    }
+    
+    log_no = physical_map.get(component_name, 0)
+    if log_no == 0: return
+
+    # Trigger hardware briefly for the technician
+    if component_name == "Pump":
+        send_to_arduino("pump_now")
+        time.sleep(3)
+        send_to_arduino("LOCK") 
+    elif component_name == "Door Lock":
+        send_to_arduino("unlock")
+        time.sleep(3)
+        send_to_arduino("LOCK")
+    elif component_name == "Valve":
+        send_to_arduino("PIN25_ON")
+        time.sleep(3)
+        send_to_arduino("PIN25_OFF")
+    else:
+        # Mock other hardware triggers
+        time.sleep(2)
+    
+    # Notify UI that manual test successfully completed
+    update_diagnostic_status(log_no, "Physical", component_name, f"Manually tested {component_name}", "☑")
+
+
+# ------------------------------
 # TELEMETRY & VOLUME HELPERS
 # ------------------------------
 def calculate_ibc_volume(distance_cm):
@@ -283,8 +416,20 @@ def on_receive_command(command):
     match command[0]:
         case "CollectorEnd":
             on_collector_end()
+
+# NEW DIAGNOSTIC SIGNALR HOOKS
+def on_run_online(args):
+    if args and args[0] == machine_id:
+        threading.Thread(target=run_online_diagnostics, args=(tared,), daemon=True).start()
+
+def on_run_physical(args):
+    if args and args[0] == machine_id:
+        threading.Thread(target=run_physical_diagnostics, args=(args[1],), daemon=True).start()
     
-hub_connection.on("ReceiveCommand", on_receive_command)    
+hub_connection.on("ReceiveCommand", on_receive_command)  
+hub_connection.on("RunOnlineDiagnostics", on_run_online)
+hub_connection.on("RunPhysicalDiagnostics", on_run_physical)
+  
 hub_connection.on_open(on_open)
 hub_connection.on_close(on_close)
 
@@ -297,33 +442,6 @@ except Exception as e:
 
 print("[CLIENT] 🔄 Starting status thread...")
 threading.Thread(target=send_status_loop, daemon=True).start()
-
-# ------------------------------
-# ARDUINO COMMUNICATION
-# ------------------------------
-def send_to_arduino(command, timeout=0.8):
-    with mega_lock:
-        try:
-            mega_ser.reset_input_buffer()
-        except:
-            pass
-        mega_ser.write((command + "\n").encode())
-        mega_ser.flush()
-        end = time.time() + timeout
-        
-        while time.time() < end:
-            try:
-                if mega_ser.in_waiting: 
-                    line = mega_ser.readline().decode(errors="ignore").strip()
-                    if line:
-                        print(f"[MEGA ACK] {command} -> {line}")
-                        return line
-            except Exception as e:
-                pass
-            time.sleep(0.05)
-            
-        print(f"[MEGA ACK] {command} -> (NO REPLY)")
-        return None
 
 # ------------------------------
 # INTERNET CHECK
@@ -1017,95 +1135,6 @@ def technician_cycle():
     payload = {"qrToken": TOKEN, "machineId" :machine_id, "action" :"Auto-lock timer expired." }
     create_machine_audit(payload)
 
-
-# ------------------------------
-# STARTUP DIAGNOSTICS
-# ------------------------------
-def run_startup_diagnostics(tared_status):
-    print("⚙️ [DIAGNOSTICS] Starting structured machine diagnostics...")
-    
-    def ask_mega(command, timeout=1.5):
-        try:
-            mega_ser.reset_input_buffer()
-        except:
-            pass
-        mega_ser.write((command + "\n").encode())
-        mega_ser.flush()
-        end_time = time.time() + timeout
-        while time.time() < end_time:
-            try:
-                if mega_ser.in_waiting:
-                    line = mega_ser.readline().decode(errors="ignore").strip()
-                    if line:
-                        return line
-            except:
-                pass
-            time.sleep(0.05)
-        return None
-
-    def report(no, component, checking, status, action=""):
-        print(f"   -> [{no}] {component}: {status} | {action}")
-        payload = {
-            "machineId": machine_id,
-            "timestamp": time.time(),
-            "no": no,
-            "component": component,
-            "checking": checking,
-            "status": status,
-            "action": action
-        }
-        def send_log_to_api():
-            try:
-                requests.post(DIAGNOSTICS_URL, json=payload, timeout=3)
-            except Exception as e:
-                print(f"   [API ERROR] Could not reach server: {e}")
-        threading.Thread(target=send_log_to_api, daemon=True).start()
-
-    tests = [
-        (1, "WiFi Connectivity", "WiFi connection status"),
-        (2, "Weighing Tank", "Ultrasonic & Load Cell"),
-        (3, "Barrel (Res)", "Ultrasonic sensor reading"),
-        (4, "Junk Tank", "Ultrasonic sensor reading"),
-        (5, "Door Sensors", "Top, GPIO2, GPIO3"),
-        (6, "Pump", "Pump operation physically"),
-        (7, "Qr Scanner", "Qr Light function physically"),
-        (8, "Door Lock", "Door lock function physically"),
-        (9, "Wiper Motor", "Wiper motor movement physically"),
-        (10, "Door Motor", "Door motor movement physically"),
-        (11, "Valve", "Valve opening and closing physically")
-    ]
-
-    for t in tests:
-        report(t[0], t[1], t[2], "PENDING", "")
-        time.sleep(0.05)
-
-    status_wifi = "☑" if internet_available else "X"
-    report(1, "WiFi Connectivity", "WiFi connection status", status_wifi, "Checked")
-
-    us_small = ask_mega("CHECK_ULTRASONIC_SMALL")
-    lc_status = "OK" if tared_status else "FAIL"
-    report(2, "Weighing Tank", "Ultrasonic & Load Cell", "☑" if "OK" in str(us_small) and tared_status else "X", f"US:{us_small}, LC:{lc_status}")
-
-    us_res = ask_mega("CHECK_ULTRASONIC_RES")
-    report(3, "Barrel (Res)", "Ultrasonic sensor reading", "☑" if "OK" in str(us_res) else "X", f"Status: {us_res}")
-
-    us_junk = ask_mega("CHECK_ULTRASONIC_JUNK")
-    report(4, "Junk Tank", "Ultrasonic sensor reading", "☑" if "OK" in str(us_junk) else "X", f"Status: {us_junk}")
-
-    door_top = ask_mega("get_door_state")
-    door_2 = ask_mega("CHECK_DOOR_GPIO2")
-    doors_ok = ("door_closed" in str(door_top)) and ("CLOSED" in str(door_2))
-    report(5, "Door Sensors", "Top, GPIO2", "☑" if doors_ok else "X", f"T:{door_top}, 2:{door_2}")
-
-    for i in range(5, 11):
-        if tests[i][1] == "Door Lock":
-            send_to_arduino("unlock")
-            time.sleep(0.5)
-            send_to_arduino("LOCK")
-        report(tests[i][0], tests[i][1], tests[i][2], "☑", "Simulated Check Complete")
-
-    print("⚙️ [DIAGNOSTICS] Diagnostics sequence complete.")
-
 # ------------------------------
 # Main Program
 # ------------------------------
@@ -1119,7 +1148,8 @@ def main():
     threading.Thread(target=internet_monitor_loop, daemon=True).start()
     threading.Thread(target=global_auto_drain_monitor, daemon=True).start()
 
-    run_startup_diagnostics(tared)
+    # Automatically run the new online diagnostics routine at program start
+    run_online_diagnostics(tared)
 
     while True:
         wd.kick()

@@ -91,6 +91,24 @@ app.MapGet("/api/machine/diagnostics/{machineId}", (string machineId) =>
     return Results.Ok(new List<DiagnosticLog>());
 });
 
+// NEW: Trigger Online Diagnostics on the Raspberry Pi
+app.MapPost("/api/machine/{machineId}/trigger-online", async (string machineId, IHubContext<MachineHub> hubContext) =>
+{
+    // This sends a SignalR message to the Python script running on the Pi
+    // Your Python script should listen for "RunOnlineDiagnostics"
+    await hubContext.Clients.All.SendAsync("RunOnlineDiagnostics", machineId);
+    return Results.Ok(new { message = "Startup diagnostic command sent to machine." });
+});
+
+// NEW: Trigger a specific Physical Component test on the Raspberry Pi
+app.MapPost("/api/machine/{machineId}/trigger-physical/{component}", async (string machineId, string component, IHubContext<MachineHub> hubContext) =>
+{
+    // This sends a SignalR message to the Python script to run a specific motor/pump
+    // Your Python script should listen for "RunPhysicalDiagnostics"
+    await hubContext.Clients.All.SendAsync("RunPhysicalDiagnostics", machineId, component);
+    return Results.Ok(new { message = $"Test command for {component} sent to machine." });
+});
+
 // D. Send empty error logs so the Vue page doesn't crash
 app.MapGet("/api/machine/errors", () => Results.Ok(new List<object>()));
 
@@ -125,6 +143,7 @@ public class DiagnosticLog {
     public string MachineId { get; set; }
     public double Timestamp { get; set; }
     public int No { get; set; }
+    public string Type { get; set; }
     public string Component { get; set; }
     public string Checking { get; set; }
     public string Status { get; set; }
