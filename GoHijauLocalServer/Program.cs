@@ -5,6 +5,8 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json; // ADD THIS
+using System.IO;        // ADD THIS
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -29,7 +31,17 @@ app.UseCors();
 // 3. In-memory fake databases
 var machines = new ConcurrentDictionary<string, MachineTelemetry>();
 var diagnosticsStore = new ConcurrentDictionary<string, List<DiagnosticLog>>(); 
-var physicalCheckReports = new List<PhysicalCheckReport>(); // Stores historical physical checks
+
+// --- NEW PERSISTENT STORAGE LOGIC ---
+var physicalCheckReports = new List<PhysicalCheckReport>(); 
+string dataFilePath = "physicalReports.json";
+
+// Load existing data when the server starts
+if (File.Exists(dataFilePath))
+{
+    var existingJson = File.ReadAllText(dataFilePath);
+    physicalCheckReports = JsonSerializer.Deserialize<List<PhysicalCheckReport>>(existingJson) ?? new List<PhysicalCheckReport>();
+}
 
 app.UseCors("AllowVueDashboard");
 
@@ -112,8 +124,13 @@ app.MapPost("/api/machine/{machineId}/trigger-physical/{component}", async (stri
 // F. Submit a new physical check report (From Technician UI)
 app.MapPost("/api/machine/physical-checks", (PhysicalCheckReport report) =>
 {
-    report.Timestamp = DateTime.UtcNow; // Record exact time submitted
+    report.Timestamp = DateTime.UtcNow; 
     physicalCheckReports.Add(report);
+
+    // Save the updated list to the JSON file so it isn't lost on restart
+    var jsonToSave = JsonSerializer.Serialize(physicalCheckReports);
+    File.WriteAllText(dataFilePath, jsonToSave);
+
     return Results.Ok(new { message = "Physical check report saved successfully." });
 });
 
