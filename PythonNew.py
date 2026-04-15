@@ -14,6 +14,26 @@ import os
 import socket
 
 # ------------------------------
+# ISOLATED MANUAL PHYSICAL TESTS GLOBALS
+# ------------------------------
+manual_test_lock = threading.Lock()
+manual_test_running = False
+machine_mode = "IDLE"   # IDLE / BUSY / MANUAL_TEST
+
+manual_test_status = {
+    "name": None,
+    "state": "IDLE"
+}
+
+MANUAL_TESTS = {
+    "door_lock_1": ("TEST_LOCK1_ON", "TEST_LOCK1_OFF", 5),
+    "door_lock_2": ("TEST_LOCK2_ON", "TEST_LOCK2_OFF", 5),
+    "door_lock_3": ("TEST_LOCK3_ON", "TEST_LOCK3_OFF", 5),
+    "pump":        ("TEST_PUMP_ON",  "TEST_PUMP_OFF",  5),
+    "valve":       ("TEST_VALVE_ON", "TEST_VALVE_OFF", 10),
+}
+
+# ------------------------------
 # PYTHON SOFTWARE WATCHDOG
 # ------------------------------
 class Watchdog:
@@ -413,9 +433,84 @@ def on_collector_end():
 
 def on_receive_command(command):
     print(f"[COMMAND] Server says → {command}")
-    match command[0]:
+
+    # Ensure command is parsed correctly
+    cmd = command[0] if isinstance(command, list) and command else command
+
+    match cmd:
         case "CollectorEnd":
             on_collector_end()
+            
+        # --- NEW MANUAL TEST COMMANDS ---
+        case "ManualTestDoorLock1":
+            result = trigger_manual_physical_test("door_lock_1")
+            publish_manual_test_status("door_lock_1", result)
+
+        case "ManualTestDoorLock2":
+            result = trigger_manual_physical_test("door_lock_2")
+            publish_manual_test_status("door_lock_2", result)
+
+        case "ManualTestDoorLock3":
+            result = trigger_manual_physical_test("door_lock_3")
+            publish_manual_test_status("door_lock_3", result)
+
+        case "ManualTestPump":
+            result = trigger_manual_physical_test("pump")
+            publish_manual_test_status("pump", result)
+
+        case "ManualTestValve":
+            result = trigger_manual_physical_test("valve")
+            publish_manual_test_status("valve", result)
+        # ---------------------------------
+        
+        case _:
+            print(f"[COMMAND] Unknown command received: {cmd}")
+
+def _can_run_manual_test():
+    # Make sure your other globals are properly referenced here!
+    return (
+        machine_mode == "IDLE"
+        and not manual_test_running
+        and not getattr(globals(), 'customer_cycle_running', False)
+        and not getattr(globals(), 'auto_drain_active', False)
+        and not getattr(globals(), 'global_auto_drain_active', False)
+        and not getattr(globals(), 'weight_read_in_progress', False)
+        and not getattr(globals(), 'pin25_on', False)
+    )
+
+def _manual_test_worker(test_name):
+    global manual_test_running, machine_mode
+
+    on_cmd, off_cmd, duration = MANUAL_TESTS[test_name]
+    try:
+        manual_test_running = True
+        machine_mode = "MANUAL_TEST"
+        publish_manual_test_status(test_name, "RUNNING")
+
+        ack_on = send_to_arduino(on_cmd) # Ensure your send_to_arduino function supports reading acks!
+        if not ack_on:
+            publish_manual_test_status(test_name, "FAILED")
+            return
+
+        time.sleep(duration)
+
+        send_to_arduino(off_cmd)
+        publish_manual_test_status(test_name, "DONE")
+    except Exception as e:
+        print(f"[MANUAL TEST] {test_name} error: {e}")
+        publish_manual_test_status(test_name, "FAILED")
+    finally:
+        manual_test_running = False
+        machine_mode = "IDLE"
+
+def trigger_manual_physical_test(test_name):
+    with manual_test_lock:
+        if test_name not in MANUAL_TESTS:
+            return "UNKNOWN_TEST"
+        if not _can_run_manual_test():
+            return "BUSY"
+        threading.Thread(target=_manual_test_worker, args=(test_name,), daemon=True).start()
+        return "RUNNING"
 
 # NEW DIAGNOSTIC SIGNALR HOOKS
 def on_run_online(args):
@@ -1139,7 +1234,9 @@ def technician_cycle():
 # Main Program
 # ------------------------------
 def main():
-    global pin25_on, wd, TOKEN 
+    # ADDED machine_mode here so Python updates the global state
+    global pin25_on, wd, TOKEN, machine_mode 
+    
     def pre_restart():
         try: send_to_arduino("LOCK")
         except: pass
@@ -1153,45 +1250,62 @@ def main():
 
     while True:
         wd.kick()
-        TOKEN = wait_for_qr() 
-        
-        payload = {"qrToken": TOKEN, "machineId": machine_id, "action": "QR Scanned."}
-        create_machine_audit(payload)
-        
-        panel_type = send_qr_to_api(TOKEN)
-        if not panel_type:
+
+        # --- ADDED: Block QR scanning when running physical tests ---
+        if manual_test_running:
+            time.sleep(0.2)
             continue
+        # ------------------------------------------------------------
 
-        if panel_type == "CUSTOMERPANEL":
-            mega_ser.reset_input_buffer()
-            mega_ser.write(b"get_led_status\n")
-            time.sleep(0.3)
-            led_status = mega_ser.readline().decode().strip()
+        machine_mode = "IDLE"
+        TOKEN = wait_for_qr()
+        machine_mode = "BUSY"
 
-            if led_status == "LED_RED_ON":
-                payload = {"qrToken": TOKEN, "machineId" :machine_id, "action" :"Customer cycle blocked - issue detected" }
-                create_machine_audit(payload)
-                send_to_arduino("LOCK")  
+        try:
+            payload = {"qrToken": TOKEN, "machineId": machine_id, "action": "QR Scanned."}
+            create_machine_audit(payload)
+
+            panel_type = send_qr_to_api(TOKEN)
+            if not panel_type:
                 continue
-            else:
-                payload = {"qrToken": TOKEN, "machineId" :machine_id, "action" :"Customer QR scanned" }
+
+            if panel_type == "CUSTOMERPANEL":
+                mega_ser.reset_input_buffer()
+                mega_ser.write(b"get_led_status\n")
+                time.sleep(0.3)
+                led_status = mega_ser.readline().decode().strip()
+
+                if led_status == "LED_RED_ON":
+                    payload = {"qrToken": TOKEN, "machineId": machine_id, "action": "Customer cycle blocked - issue detected"}
+                    create_machine_audit(payload)
+                    send_to_arduino("LOCK")
+                    continue
+                else:
+                    payload = {"qrToken": TOKEN, "machineId": machine_id, "action": "Customer QR scanned"}
+                    create_machine_audit(payload)
+                    customer_cycle()
+
+            elif panel_type == "COLLECTORPANEL":
+                payload = {"qrToken": TOKEN, "machineId": machine_id, "action": "Collector QR scanned"}
                 create_machine_audit(payload)
-                customer_cycle()
+                collector_cycle()
 
-        elif panel_type == "COLLECTORPANEL":
-            payload = {"qrToken": TOKEN, "machineId" :machine_id, "action" :"Collector QR scanned" }
-            create_machine_audit(payload)
-            collector_cycle()
+            elif panel_type == "TECHNICIANPANEL":
+                payload = {"qrToken": TOKEN, "machineId": machine_id, "action": "Technician QR scanned"}
+                create_machine_audit(payload)
+                technician_cycle()
 
-        elif panel_type == "TECHNICIANPANEL":
-            payload = {"qrToken": TOKEN, "machineId" :machine_id, "action" :"Technician QR scanned" }
-            create_machine_audit(payload)
-            technician_cycle()
+            else:
+                send_to_arduino("LOCK")
 
-        else:
-            send_to_arduino("LOCK")
+            time.sleep(2)
 
-        time.sleep(2)
+        finally:
+            # Ensure the machine is always marked as IDLE when a cycle finishes or fails
+            machine_mode = "IDLE"
+
+if __name__ == "__main__":
+    main()
 
 # ------------------------------
 # Entry Point

@@ -6,13 +6,15 @@ import App from './App.vue'
 import MachineTelemetryView from './views/MachineTelemetryView.vue'
 import ErrorLogsView from './views/ErrorLogsView.vue'
 import DiagnosticsView from './views/DiagnosticsView.vue' // <-- Import new view
+import PhysicalHistoryView from './views/PhysicalHistoryView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/', component: MachineTelemetryView },
     { path: '/errors', component: ErrorLogsView },
-    { path: '/diagnostics', component: DiagnosticsView } // <-- Add route
+    { path: '/diagnostics', component: DiagnosticsView }, // <-- Add route
+    { path: '/physical-history', component: PhysicalHistoryView }
   ]
 })
 
