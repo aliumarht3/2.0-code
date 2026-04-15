@@ -74,7 +74,7 @@
       </div>
     </Card>
 
-    <Card class="bg-white text-gray-800 text-sm overflow-hidden p-0 shadow-lg border border-gray-200 rounded-xl">
+    <Card class="bg-white text-gray-800 text-sm overflow-hidden p-0 shadow-lg border border-gray-200 rounded-xl mb-8">
       <div class="p-5 bg-gray-50 border-b border-gray-200 flex justify-between items-center">
         <span class="text-lg font-extrabold text-gray-800 tracking-wider uppercase flex items-center gap-2">
           🛠️ Physical Diagnosis (Technician Mode)
@@ -88,7 +88,7 @@
               <th class="p-4 font-extrabold w-16 text-center">No</th>
               <th class="p-4 font-extrabold w-56">Component</th>
               <th class="p-4 font-extrabold w-64">Physical Action</th>
-              <th class="p-4 font-extrabold w-32 text-center">Status</th>
+              <th class="p-4 font-extrabold w-32 text-center">Passed?</th>
               <th class="p-4 font-extrabold w-48 text-center">Manual Test</th>
             </tr>
           </thead>
@@ -97,11 +97,12 @@
               <td class="p-4 text-center text-gray-600 font-mono text-base font-bold">{{ log.no }}</td>
               <td class="p-4 font-bold text-gray-800 text-base">{{ log.component }}</td>
               <td class="p-4 text-gray-600 text-sm font-medium">{{ log.checking }}</td>
-              <td class="p-4 text-center flex justify-center items-center h-full">
-                <svg v-if="log.status === '☑'" class="w-8 h-8 text-green-500 mt-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path>
-                </svg>
-                <span v-else class="text-gray-400 text-sm font-bold uppercase tracking-wider mt-4 block">Waiting...</span>
+              <td class="p-4 text-center">
+                <input 
+                  type="checkbox" 
+                  v-model="log.isChecked" 
+                  class="w-6 h-6 text-green-600 bg-gray-100 border-gray-300 rounded focus:ring-green-500 cursor-pointer"
+                >
               </td>
               <td class="p-4 text-center">
                 <button 
@@ -114,6 +115,16 @@
             </tr>
           </tbody>
         </table>
+      </div>
+      
+      <div class="p-4 bg-gray-50 border-t border-gray-200 flex justify-end">
+        <button 
+          @click="submitPhysicalChecks" 
+          class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-6 rounded-lg shadow-md transition-all flex items-center gap-2"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"></path></svg>
+          Submit Physical Report
+        </button>
       </div>
     </Card>
   </DashboardLayout>
@@ -129,7 +140,7 @@ const selectedMachine = ref('GO-000002');
 const isOnlineRunning = ref(false);
 let connection = null;
 
-// Human-friendly translations for technical actions (Requirement 5)
+// Human-friendly translations for technical actions 
 const humanizeMap = {
   'WiFi Connectivity': 'The machine lost internet. Please restart the Wi-Fi router or check the password.',
   'Weighing Tank (Ultrasonic)': 'The tank depth sensor is blocked. Please wipe the sensor inside the tank with a dry cloth.',
@@ -141,40 +152,31 @@ const humanizeMap = {
 
 const formatHumanAction = (component, rawAction) => {
   if (!rawAction) return "";
-  // If the backend sent a raw technical string, we override it with our friendly language
   return humanizeMap[component] || rawAction;
 };
 
-// Default structures based on the PDF Requirements
-const createDefaultLogs = () => {
-  return {
-    Online: [
-      { no: 1, type: 'Online', component: 'WiFi Connectivity', checking: 'WiFi connection status', status: 'Idle', action: '' },
-      { no: 2, type: 'Online', component: 'Weighing Tank (Ultrasonic)', checking: 'Object depth / Ultrasonic reading', status: 'Idle', action: '' },
-      { no: 3, type: 'Online', component: 'Weighing Tank (Load Cell)', checking: 'Weight / Load cell reading', status: 'Idle', action: '' },
-      { no: 4, type: 'Online', component: 'Barrel', checking: 'Storage level / Ultrasonic reading', status: 'Idle', action: '' },
-      { no: 5, type: 'Online', component: 'Filter #1', checking: 'Flow & Turbidity status', status: 'Idle', action: '' },
-      { no: 6, type: 'Online', component: 'Door Sensors', checking: 'Relay input / Security status', status: 'Idle', action: '' }
-    ],
-    Physical: [
-      { no: 1, type: 'Physical', component: 'Pump', checking: 'Verify pump operates physically', status: 'Idle', action: '' },
-      { no: 2, type: 'Physical', component: 'Qr Scanner', checking: 'Verify QR light is functioning', status: 'Idle', action: '' },
-      { no: 3, type: 'Physical', component: 'Door Lock', checking: 'Verify door locking mechanism', status: 'Idle', action: '' },
-      { no: 4, type: 'Physical', component: 'Wiper Motor', checking: 'Verify wiper sweeps properly', status: 'Idle', action: '' },
-      { no: 5, type: 'Physical', component: 'Door Motor', checking: 'Verify door opens/closes smoothly', status: 'Idle', action: '' },
-      { no: 6, type: 'Physical', component: 'Valve', checking: 'Verify valve actuates correctly', status: 'Idle', action: '' }
-    ]
-  };
-};
+// Default setup
+const onlineLogs = ref([
+  { no: 1, type: 'Online', component: 'WiFi Connectivity', checking: 'WiFi connection status', status: 'Idle', action: '' },
+  { no: 2, type: 'Online', component: 'Weighing Tank (Ultrasonic)', checking: 'Object depth / Ultrasonic reading', status: 'Idle', action: '' },
+  { no: 3, type: 'Online', component: 'Weighing Tank (Load Cell)', checking: 'Weight / Load cell reading', status: 'Idle', action: '' },
+  { no: 4, type: 'Online', component: 'Barrel', checking: 'Storage level / Ultrasonic reading', status: 'Idle', action: '' },
+  { no: 5, type: 'Online', component: 'Filter #1', checking: 'Flow & Turbidity status', status: 'Idle', action: '' },
+  { no: 6, type: 'Online', component: 'Door Sensors', checking: 'Relay input / Security status', status: 'Idle', action: '' }
+]);
 
-const onlineLogs = ref(createDefaultLogs().Online);
-const physicalLogs = ref(createDefaultLogs().Physical);
+const physicalLogs = ref([
+  { no: 1, type: 'Physical', component: 'Pump', checking: 'Verify pump operates physically', isChecked: false },
+  { no: 2, type: 'Physical', component: 'Qr Scanner', checking: 'Verify QR light is functioning', isChecked: false },
+  { no: 3, type: 'Physical', component: 'Door Lock', checking: 'Verify door locking mechanism', isChecked: false },
+  { no: 4, type: 'Physical', component: 'Wiper Motor', checking: 'Verify wiper sweeps properly', isChecked: false },
+  { no: 5, type: 'Physical', component: 'Door Motor', checking: 'Verify door opens/closes smoothly', isChecked: false },
+  { no: 6, type: 'Physical', component: 'Valve', checking: 'Verify valve actuates correctly', isChecked: false }
+]);
 
-// Req 1: Trigger Startup diagnostics on Pi
+// Trigger Startup diagnostics on Pi
 const triggerOnlineDiagnostics = async () => {
   isOnlineRunning.value = true;
-  
-  // Set all to IN_PROGRESS so the user knows it started
   onlineLogs.value.forEach(log => {
     log.status = 'IN_PROGRESS';
     log.action = '';
@@ -190,7 +192,7 @@ const triggerOnlineDiagnostics = async () => {
   }
 };
 
-// Req 2: Trigger Physical part test
+// Trigger Physical part test
 const testPhysicalComponent = async (componentName) => {
   try {
     await fetch(`http://localhost:5137/api/machine/${selectedMachine.value}/trigger-physical/${encodeURIComponent(componentName)}`, {
@@ -202,6 +204,35 @@ const testPhysicalComponent = async (componentName) => {
   }
 };
 
+// Submit physical report to Backend
+const submitPhysicalChecks = async () => {
+  const report = {
+    machineId: selectedMachine.value,
+    checks: physicalLogs.value.map(log => ({
+      component: log.component,
+      passed: log.isChecked
+    }))
+  };
+
+  try {
+    const response = await fetch(`http://localhost:5137/api/machine/physical-checks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(report)
+    });
+
+    if(response.ok) {
+      alert('✅ Physical check report submitted successfully!');
+      // Clear checkboxes after success
+      physicalLogs.value.forEach(log => log.isChecked = false);
+    }
+  } catch (error) {
+    console.error("Failed to submit report:", error);
+    alert('❌ Failed to submit the physical report.');
+  }
+};
+
+// SignalR connection setup
 onMounted(async () => {
   connection = new signalR.HubConnectionBuilder()
     .withUrl("http://localhost:5137/machineHub")
@@ -215,16 +246,14 @@ onMounted(async () => {
       log.action = "";
     }
 
-    // Determine which array to update based on Type provided by C# backend
-    const targetArray = log.type === 'Physical' ? physicalLogs.value : onlineLogs.value;
-    const existingIndex = targetArray.findIndex(x => x.component === log.component);
-    
-    if (existingIndex !== -1) {
-      targetArray[existingIndex].status = log.status;
-      targetArray[existingIndex].action = log.action;
+    if (log.type === 'Online') {
+      const existingIndex = onlineLogs.value.findIndex(x => x.component === log.component);
+      if (existingIndex !== -1) {
+        onlineLogs.value[existingIndex].status = log.status;
+        onlineLogs.value[existingIndex].action = log.action;
+      }
     }
 
-    // If all online tests are no longer 'IN_PROGRESS', turn off the loading spinner
     if (!onlineLogs.value.some(l => l.status === 'IN_PROGRESS')) {
       isOnlineRunning.value = false;
     }
@@ -239,9 +268,12 @@ onMounted(async () => {
 });
 
 watch(selectedMachine, () => {
-  // Reset UI when switching machines
-  onlineLogs.value = createDefaultLogs().Online;
-  physicalLogs.value = createDefaultLogs().Physical;
+  // Reset logs when switching machines
+  onlineLogs.value.forEach(log => {
+    log.status = 'Idle';
+    log.action = '';
+  });
+  physicalLogs.value.forEach(log => log.isChecked = false);
 });
 
 onUnmounted(() => {

@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
@@ -27,7 +28,8 @@ app.UseCors();
 
 // 3. In-memory fake databases
 var machines = new ConcurrentDictionary<string, MachineTelemetry>();
-var diagnosticsStore = new ConcurrentDictionary<string, List<DiagnosticLog>>(); // NEW: Store live diagnostics history
+var diagnosticsStore = new ConcurrentDictionary<string, List<DiagnosticLog>>(); 
+var physicalCheckReports = new List<PhysicalCheckReport>(); // Stores historical physical checks
 
 app.UseCors("AllowVueDashboard");
 
@@ -42,74 +44,90 @@ app.MapHub<MachineHub>("/machineHub");
 app.MapPost("/api/machine/telemetry", (IncomingPythonTelemetry payload) =>
 {
     // Format it for the Vue Dashboard
-    machines[payload.MachineId] = new MachineTelemetry {
+    var telemetry = new MachineTelemetry
+    {
         MachineId = payload.MachineId,
-        Location = "Local Testing Desk",
+        Location = "GMI Main Campus", // Example static location
         IsOnline = true,
         Metrics = payload.Metrics
     };
-    return Results.Ok(new { message = "Telemetry updated" });
+
+    // Save it to our fake DB
+    machines[payload.MachineId] = telemetry;
+    return Results.Ok(new { message = "Telemetry saved." });
 });
 
-// B. Send Telemetry to Vue Dashboard
-app.MapGet("/api/machine/telemetry/latest", () =>
+// B. Get Telemetry for the Dashboard
+app.MapGet("/api/machine/telemetry", () =>
 {
-    return Results.Ok(machines.Values);
+    return Results.Ok(machines.Values.ToList());
 });
 
-// C. Receive Table-based Diagnostics from Python & Broadcast instantly via SignalR to Vue
-app.MapPost("/api/machine/diagnostics", async (DiagnosticLog payload, IHubContext<MachineHub> hubContext) =>
+// C. Receive Live Diagnostic Updates from Raspberry Pi
+app.MapPost("/api/machine/diagnostics", async (DiagnosticLog log, IHubContext<MachineHub> hubContext) =>
 {
-    // Maintain state in memory so switching dropdown updates instantly
-    if (!diagnosticsStore.ContainsKey(payload.MachineId)) 
+    // Make sure we have a list for this machine
+    if (!diagnosticsStore.ContainsKey(log.MachineId))
     {
-        diagnosticsStore[payload.MachineId] = new List<DiagnosticLog>();
-    }
-    
-    var list = diagnosticsStore[payload.MachineId];
-    var existing = list.FirstOrDefault(x => x.No == payload.No);
-    
-    if (existing != null) {
-        existing.Status = payload.Status;
-        existing.Action = payload.Action;
-        existing.Timestamp = payload.Timestamp;
-    } else {
-        list.Add(payload);
+        diagnosticsStore[log.MachineId] = new List<DiagnosticLog>();
     }
 
-    // Broadcast to Vue UI
-    await hubContext.Clients.All.SendAsync("ReceiveDiagnosticLog", payload);
-    return Results.Ok();
+    var machineLogs = diagnosticsStore[log.MachineId];
+
+    // Update existing or add new
+    var existing = machineLogs.FirstOrDefault(l => l.Component == log.Component);
+    if (existing != null)
+    {
+        existing.Status = log.Status;
+        existing.Action = log.Action;
+        existing.Timestamp = log.Timestamp;
+    }
+    else
+    {
+        machineLogs.Add(log);
+    }
+
+    // Broadcast the update immediately to the Vue frontend via SignalR
+    await hubContext.Clients.All.SendAsync("ReceiveDiagnosticLog", log);
+
+    return Results.Ok(new { message = "Log received and broadcasted." });
 });
 
-// NEW: Fetch specific machine's diagnostic table layout
-app.MapGet("/api/machine/diagnostics/{machineId}", (string machineId) =>
-{
-    if (diagnosticsStore.TryGetValue(machineId, out var list)) {
-        return Results.Ok(list.OrderBy(x => x.No));
-    }
-    return Results.Ok(new List<DiagnosticLog>());
-});
-
-// NEW: Trigger Online Diagnostics on the Raspberry Pi
+// D. Trigger Online Diagnostics on the Raspberry Pi
 app.MapPost("/api/machine/{machineId}/trigger-online", async (string machineId, IHubContext<MachineHub> hubContext) =>
 {
-    // This sends a SignalR message to the Python script running on the Pi
-    // Your Python script should listen for "RunOnlineDiagnostics"
+    // Sends a command to Python to run startup checks
     await hubContext.Clients.All.SendAsync("RunOnlineDiagnostics", machineId);
     return Results.Ok(new { message = "Startup diagnostic command sent to machine." });
 });
 
-// NEW: Trigger a specific Physical Component test on the Raspberry Pi
+// E. Trigger a specific Physical Component test on the Raspberry Pi
 app.MapPost("/api/machine/{machineId}/trigger-physical/{component}", async (string machineId, string component, IHubContext<MachineHub> hubContext) =>
 {
-    // This sends a SignalR message to the Python script to run a specific motor/pump
-    // Your Python script should listen for "RunPhysicalDiagnostics"
+    // Sends a command to Python to pulse a motor/relay
     await hubContext.Clients.All.SendAsync("RunPhysicalDiagnostics", machineId, component);
     return Results.Ok(new { message = $"Test command for {component} sent to machine." });
 });
 
-// D. Send empty error logs so the Vue page doesn't crash
+// F. Submit a new physical check report (From Technician UI)
+app.MapPost("/api/machine/physical-checks", (PhysicalCheckReport report) =>
+{
+    report.Timestamp = DateTime.UtcNow; // Record exact time submitted
+    physicalCheckReports.Add(report);
+    return Results.Ok(new { message = "Physical check report saved successfully." });
+});
+
+// G. Get all past physical check reports for a specific machine
+app.MapGet("/api/machine/physical-checks/{machineId}", (string machineId) =>
+{
+    var reports = physicalCheckReports
+        .Where(r => r.MachineId == machineId)
+        .OrderByDescending(r => r.Timestamp) // Newest first
+        .ToList();
+    return Results.Ok(reports);
+});
+
+// H. Send empty error logs so the Vue page doesn't crash (Placeholder)
 app.MapGet("/api/machine/errors", () => Results.Ok(new List<object>()));
 
 app.Run();
@@ -138,14 +156,26 @@ public class MetricsData {
     public double JunkTankDistanceCm { get; set; }
 }
 
-// NEW: Diagnostic Table Row Model
 public class DiagnosticLog {
     public string MachineId { get; set; }
     public double Timestamp { get; set; }
     public int No { get; set; }
-    public string Type { get; set; }
+    public string Type { get; set; } // "Online" or "Physical"
     public string Component { get; set; }
     public string Checking { get; set; }
     public string Status { get; set; }
     public string Action { get; set; }
+}
+
+// Data models for the new physical check reporting system
+public class PhysicalCheckItem {
+    public string Component { get; set; }
+    public bool Passed { get; set; }
+}
+
+public class PhysicalCheckReport {
+    public string Id { get; set; } = Guid.NewGuid().ToString();
+    public string MachineId { get; set; }
+    public DateTime Timestamp { get; set; }
+    public List<PhysicalCheckItem> Checks { get; set; } = new();
 }

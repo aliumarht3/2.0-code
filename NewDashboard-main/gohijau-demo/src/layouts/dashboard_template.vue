@@ -16,6 +16,16 @@ import logoImg from '../assets/logo.png'
         <router-link to="/" class="block hover:text-green-300">Telemetry</router-link>
         <router-link to="/diagnostics" active-class="text-green-300 font-bold" class="block hover:text-green-300">Diagnostics</router-link>
         <router-link to="/errors" class="block hover:text-green-300">Error Logs</router-link>
+        <router-link 
+          to="/physical-history" 
+          class="flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-semibold"
+          :class="$route.path === '/physical-history' ? 'bg-green-600 text-white shadow-md' : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+          </svg>
+          Physical History
+        </router-link>
       </nav>
     </aside>
     
