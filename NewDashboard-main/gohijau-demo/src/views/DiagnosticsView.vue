@@ -109,11 +109,15 @@
               </td>
               <td class="p-4 text-center">
                 <button 
+                  v-if="log.component !== 'Qr Scanner'"
                   @click="testPhysicalComponent(log.component)" 
                   class="bg-gray-800 hover:bg-black text-white text-xs px-4 py-2 rounded font-bold transition-all shadow-sm"
                 >
                   RUN PART
                 </button>
+                <span v-else class="text-xs font-bold text-gray-400 uppercase tracking-wider">
+                  Auto (Check Visually)
+                </span>
               </td>
             </tr>
           </tbody>
@@ -173,10 +177,11 @@ const onlineLogs = ref([
 
 const physicalLogs = ref([
   { no: 1, type: 'Physical', component: 'Pump', checking: 'Verify pump operates physically', isChecked: false },
-  { no: 2, type: 'Physical', component: 'Door Lock', checking: 'Verify door locking mechanism (Tech)', isChecked: false },
-  { no: 3, type: 'Physical', component: 'Wiper Motor', checking: 'Verify wiper sweeps properly', isChecked: false },
-  { no: 4, type: 'Physical', component: 'Door Motor', checking: 'Verify door opens/closes smoothly', isChecked: false },
-  { no: 5, type: 'Physical', component: 'Valve', checking: 'Verify valve actuates correctly', isChecked: false }
+  { no: 2, type: 'Physical', component: 'Qr Scanner', checking: 'Verify QR light is functioning (Always Flashing)', isChecked: false },
+  { no: 3, type: 'Physical', component: 'Door Lock', checking: 'Verify door locking mechanism (Tech)', isChecked: false },
+  { no: 4, type: 'Physical', component: 'Wiper Motor', checking: 'Verify wiper sweeps properly', isChecked: false },
+  { no: 5, type: 'Physical', component: 'Door Motor', checking: 'Verify door opens/closes smoothly', isChecked: false },
+  { no: 6, type: 'Physical', component: 'Valve', checking: 'Verify valve actuates correctly', isChecked: false }
 ]);
 
 const triggerOnlineDiagnostics = async () => {
