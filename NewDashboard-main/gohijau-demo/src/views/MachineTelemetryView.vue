@@ -8,7 +8,7 @@
       </button>
     </div>
 
-    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6" v-if="machines.length > 0">
       <Card v-for="machine in machines" :key="machine.machineId" class="relative overflow-hidden">
         <div class="absolute top-4 right-4 flex items-center gap-2">
           <span class="relative flex h-3 w-3">
@@ -18,11 +18,7 @@
           <span class="text-xs font-semibold text-gray-600">{{ machine.isOnline ? 'Running' : 'Offline' }}</span>
         </div>
 
-        <h2 class="text-lg font-bold text-gray-900 mb-1">{{ machine.machineId }}</h2>
-        <p class="text-sm text-gray-500 mb-4 flex items-center gap-1">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.243-4.243a8 8 0 1111.314 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-          {{ machine.location || 'Location Not Set' }}
-        </p>
+        <h2 class="text-lg font-bold text-gray-900 mb-4">{{ machine.machineId }}</h2>
 
         <div class="mb-4">
           <div class="flex justify-between text-sm mb-1">
@@ -56,16 +52,25 @@
         </div>
       </Card>
     </div>
+
+    <div v-else class="flex flex-col items-center justify-center py-20 text-center">
+      <svg class="w-16 h-16 text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 002-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
+      <h3 class="text-lg font-medium text-gray-900">No Active Machines</h3>
+      <p class="text-gray-500 mt-1">Waiting for live telemetry data to be transmitted...</p>
+    </div>
+
   </DashboardLayout>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 import DashboardLayout from '@/layouts/dashboard_template.vue';
 import Card from '@/components/Card.vue';
 import api from '@/lib/apiClient';
+import * as signalR from '@microsoft/signalr';
 
 const machines = ref([]);
+let connection = null;
 
 const getTankColor = (percentage) => {
   if (percentage >= 90) return 'bg-red-500';
@@ -75,30 +80,42 @@ const getTankColor = (percentage) => {
 
 const fetchTelemetry = async () => {
   try {
-    // Note: Update this endpoint based on your actual .NET backend route
-    const { data } = await api.get('/api/machine/telemetry/latest');
-    machines.value = data;
+    const { data } = await api.get('/api/machine/telemetry');
+    machines.value = data || [];
   } catch (error) {
     console.error("Failed to fetch machine telemetry:", error);
-    // Mock Data for testing the UI before backend is ready
-    machines.value = [
-      {
-        machineId: "GO-000002",
-        location: "GMI Student Center",
-        isOnline: true,
-        metrics: { mainTankVolumeLiters: 345.5, turbidityValue: 450, junkTankDistanceCm: 80 }
-      },
-      {
-        machineId: "GO-000003",
-        location: "Subang Jaya Parade",
-        isOnline: false,
-        metrics: { mainTankVolumeLiters: 490.0, turbidityValue: 800, junkTankDistanceCm: 15 }
-      }
-    ];
+    machines.value = [];
   }
 };
 
-onMounted(() => {
-  fetchTelemetry();
+onMounted(async () => {
+  await fetchTelemetry();
+
+  connection = new signalR.HubConnectionBuilder()
+    .withUrl("http://localhost:5137/machineHub")
+    .withAutomaticReconnect()
+    .build();
+
+  connection.on("ReceiveTelemetryUpdate", (updatedMachine) => {
+    const index = machines.value.findIndex(m => m.machineId === updatedMachine.machineId);
+    if (index !== -1) {
+      machines.value[index] = updatedMachine;
+    } else {
+      machines.value.push(updatedMachine);
+    }
+  });
+
+  try {
+    await connection.start();
+    console.log("🟢 Connected to live telemetry stream");
+  } catch (err) {
+    console.error("🔴 SignalR Connection Error: ", err);
+  }
+});
+
+onUnmounted(() => {
+  if (connection) {
+    connection.stop();
+  }
 });
 </script>

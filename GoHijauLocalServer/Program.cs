@@ -53,20 +53,21 @@ app.MapHub<MachineHub>("/machineHub");
 // ==========================================
 
 // A. Receive Telemetry from Python script
-app.MapPost("/api/machine/telemetry", (IncomingPythonTelemetry payload) =>
+app.MapPost("/api/machine/telemetry", async (IncomingPythonTelemetry payload, IHubContext<MachineHub> hubContext) =>
 {
-    // Format it for the Vue Dashboard
     var telemetry = new MachineTelemetry
     {
         MachineId = payload.MachineId,
-        Location = "GMI Main Campus", // Example static location
         IsOnline = true,
         Metrics = payload.Metrics
     };
 
-    // Save it to our fake DB
     machines[payload.MachineId] = telemetry;
-    return Results.Ok(new { message = "Telemetry saved." });
+
+    // --- NEW: Broadcast to frontend instantly ---
+    await hubContext.Clients.All.SendAsync("ReceiveTelemetryUpdate", telemetry);
+
+    return Results.Ok(new { message = "Telemetry saved and broadcasted." });
 });
 
 // B. Get Telemetry for the Dashboard
@@ -168,7 +169,6 @@ public class IncomingPythonTelemetry {
 
 public class MachineTelemetry {
     public string MachineId { get; set; }
-    public string Location { get; set; }
     public bool IsOnline { get; set; }
     public MetricsData Metrics { get; set; }
 }

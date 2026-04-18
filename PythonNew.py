@@ -181,6 +181,31 @@ internet_lock = threading.Lock()
 
 TURBIDITY_LIMIT = 600
 
+def live_telemetry_loop():
+    while True:
+        time.sleep(10) # Send updates every 10 seconds
+        
+        # Only poll if the machine isn't actively busy pouring or testing
+        if machine_mode == "IDLE" and not getattr(globals(), 'manual_test_running', False):
+            try:
+                telemetry = get_telemetry_from_arduino()
+                volume_liters = calculate_ibc_volume(telemetry.get('res_dist', 0))
+                
+                payload = {
+                    "MachineId": machine_id,
+                    "Metrics": {
+                        "WeightKg": 0, # Skip heavy load cell polling here to prevent serial lockups
+                        "MainTankVolumeLiters": volume_liters,
+                        "TurbidityValue": telemetry.get('turbidity', 0),
+                        "JunkTankDistanceCm": telemetry.get('junk_dist', 0)
+                    }
+                }
+                
+                headers = {"Content-Type": "application/json", "ngrok-skip-browser-warning": "true"}
+                requests.post(TELEMETRY_URL, json=payload, headers=headers, timeout=5)
+            except Exception as e:
+                print(f"[TELEMETRY] Live update failed: {e}")
+
 # ------------------------------
 # ARDUINO COMMUNICATION HELPER
 # ------------------------------
@@ -243,18 +268,17 @@ def publish_manual_test_status(test_name, status):
         "valve": "Valve"
     }
     comp_name = mapping.get(test_name, test_name)
-    ui_status = "☑" if status == "DONE" else ("IN_PROGRESS" if status == "RUNNING" else "X")
+    # Changed to PASS / FAIL
+    ui_status = "PASS" if status == "DONE" else ("IN_PROGRESS" if status == "RUNNING" else "FAIL")
     
     update_diagnostic_status(0, "Physical", comp_name, f"Manual Test: {status}", ui_status)
-
 
 def run_online_diagnostics(tared_status=True):
     print("\n--- 🌐 STARTED ONLINE DIAGNOSTICS ---")
     
-    # 1. Define structure mapping matching the Vue frontend
-    # WARNING: The "comp" names here MUST perfectly match the names in the actual tests below!
+    # FIX: Renamed 'Has WiFi?' to 'WiFi Connectivity' to match Vue exactly
     tests = [
-        {"no": 1, "comp": "Has WiFi?", "chk": "Connecting to 8.8.8.8:53"},
+        {"no": 1, "comp": "WiFi Connectivity", "chk": "Connecting to 8.8.8.8:53"},
         {"no": 2, "comp": "Weighing Tank (Ultrasonic)", "chk": "Object depth / Ultrasonic reading"},
         {"no": 3, "comp": "Weighing Tank (Load Cell)", "chk": "Weight / Load cell reading"},
         {"no": 4, "comp": "Barrel", "chk": "Storage level / Ultrasonic reading"},
@@ -262,51 +286,46 @@ def run_online_diagnostics(tared_status=True):
         {"no": 6, "comp": "Door Sensors", "chk": "Relay input / Security status"}
     ]
 
-    # 2. Notify UI that tests are starting (This renders the IN_PROGRESS spinners)
     for test in tests:
         update_diagnostic_status(test["no"], "Online", test["comp"], test["chk"], "IN_PROGRESS")
         time.sleep(0.1)
 
-    # ---------------------------------------------------------
-    # ACTUAL HARDWARE & NETWORK TESTS
-    # ---------------------------------------------------------
-
-    # 1. WiFi Test (Using reliable Python sockets)
+    # 1. WiFi Test 
     try:
         socket.setdefaulttimeout(3)
         socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("8.8.8.8", 53))
-        update_diagnostic_status(1, "Online", "Has WiFi?", "Connected", "☑")
+        update_diagnostic_status(1, "Online", "WiFi Connectivity", "Connected", "PASS")
     except Exception as e:
-        update_diagnostic_status(1, "Online", "Has WiFi?", f"Error: {e}", "X")
+        update_diagnostic_status(1, "Online", "WiFi Connectivity", f"Error: {e}", "FAIL")
 
     time.sleep(0.5)
 
     # 2. Ultrasonic (Weighing)
     try:
         us_small = send_to_arduino("CHECK_ULTRASONIC_SMALL")
-        status_us_small = "☑" if us_small and "OK" in str(us_small) else "X"
-        update_diagnostic_status(2, "Online", "Weighing Tank (Ultrasonic)", "Object depth / Ultrasonic reading", status_us_small, f"US Reading: {us_small}" if status_us_small=="X" else "")
+        status_us_small = "PASS" if us_small and "OK" in str(us_small) else "FAIL"
+        update_diagnostic_status(2, "Online", "Weighing Tank (Ultrasonic)", "Object depth / Ultrasonic reading", status_us_small, f"US Reading: {us_small}" if status_us_small=="FAIL" else "")
     except Exception as e:
-        update_diagnostic_status(2, "Online", "Weighing Tank (Ultrasonic)", f"Error: {e}", "X")
+        update_diagnostic_status(2, "Online", "Weighing Tank (Ultrasonic)", f"Error: {e}", "FAIL")
 
     time.sleep(0.5)
 
     # 3. Load Cell
     try:
-        status_lc = "☑" if tared_status else "X"
+        status_lc = "PASS" if tared_status else "FAIL"
         update_diagnostic_status(3, "Online", "Weighing Tank (Load Cell)", "Weight / Load cell reading", status_lc)
     except Exception as e:
-        update_diagnostic_status(3, "Online", "Weighing Tank (Load Cell)", f"Error: {e}", "X")
+        update_diagnostic_status(3, "Online", "Weighing Tank (Load Cell)", f"Error: {e}", "FAIL")
 
     time.sleep(0.5)
 
     # 4. Barrel
     try:
         us_res = send_to_arduino("CHECK_ULTRASONIC_RES")
-        status_us_res = "☑" if us_res and "OK" in str(us_res) else "X"
-        update_diagnostic_status(4, "Online", "Barrel", "Storage level / Ultrasonic reading", status_us_res, f"Barrel Reading: {us_res}" if status_us_res=="X" else "")
+        status_us_res = "PASS" if us_res and "OK" in str(us_res) else "FAIL"
+        update_diagnostic_status(4, "Online", "Barrel", "Storage level / Ultrasonic reading", status_us_res, f"Barrel Reading: {us_res}" if status_us_res=="FAIL" else "")
     except Exception as e:
-        update_diagnostic_status(4, "Online", "Barrel", f"Error: {e}", "X")
+        update_diagnostic_status(4, "Online", "Barrel", f"Error: {e}", "FAIL")
 
     time.sleep(0.5)
 
@@ -314,11 +333,11 @@ def run_online_diagnostics(tared_status=True):
     try:
         telemetry = get_telemetry_from_arduino()
         turbidity_val = telemetry.get('turbidity', 0)
-        TURBIDITY_LIMIT = 3000 # Make sure this matches your actual limit variable
-        status_filter = "☑" if turbidity_val < TURBIDITY_LIMIT else "X"
-        update_diagnostic_status(5, "Online", "Filter #1", "Flow & Turbidity status", status_filter, f"Turbidity Level: {turbidity_val}" if status_filter=="X" else "")
+        TURBIDITY_LIMIT = 3000 
+        status_filter = "PASS" if turbidity_val < TURBIDITY_LIMIT else "FAIL"
+        update_diagnostic_status(5, "Online", "Filter #1", "Flow & Turbidity status", status_filter, f"Turbidity Level: {turbidity_val}" if status_filter=="FAIL" else "")
     except Exception as e:
-        update_diagnostic_status(5, "Online", "Filter #1", f"Error: {e}", "X")
+        update_diagnostic_status(5, "Online", "Filter #1", f"Error: {e}", "FAIL")
 
     time.sleep(0.5)
 
@@ -327,9 +346,9 @@ def run_online_diagnostics(tared_status=True):
         door_top = send_to_arduino("get_door_state")
         door_2 = send_to_arduino("CHECK_DOOR_GPIO2")
         doors_ok = ("door_closed" in str(door_top)) and ("CLOSED" in str(door_2))
-        update_diagnostic_status(6, "Online", "Door Sensors", "Relay input / Security status", "☑" if doors_ok else "X", "Check doors" if not doors_ok else "")
+        update_diagnostic_status(6, "Online", "Door Sensors", "Relay input / Security status", "PASS" if doors_ok else "FAIL", "Check doors" if not doors_ok else "")
     except Exception as e:
-        update_diagnostic_status(6, "Online", "Door Sensors", f"Error: {e}", "X")
+        update_diagnostic_status(6, "Online", "Door Sensors", f"Error: {e}", "FAIL")
 
     print("--- ONLINE DIAGNOSTICS COMPLETE ---\n")
 
@@ -1340,6 +1359,7 @@ def main():
     wd = Watchdog(timeout=120, pre_restart_callback=pre_restart)
     threading.Thread(target=internet_monitor_loop, daemon=True).start()
     threading.Thread(target=global_auto_drain_monitor, daemon=True).start()
+    threading.Thread(target=live_telemetry_loop, daemon=True).start()
 
     # Automatically run the new online diagnostics routine at program start
     run_online_diagnostics(tared)

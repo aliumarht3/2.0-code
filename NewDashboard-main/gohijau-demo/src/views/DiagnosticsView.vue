@@ -57,16 +57,19 @@
                 <span v-if="log.status === 'IN_PROGRESS'" class="flex justify-center mt-2">
                   <span class="animate-pulse block h-5 w-5 bg-yellow-400 rounded-full shadow-sm border-2 border-yellow-500"></span>
                 </span>
-                <svg v-else-if="log.status === '☑'" class="w-8 h-8 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path>
-                </svg>
-                <svg v-else-if="log.status === 'X'" class="w-8 h-8 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                
+                <svg v-else-if="log.status === 'X' || log.status === 'FAIL'" class="w-8 h-8 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M6 18L18 6M6 6l12 12"></path>
                 </svg>
-                <span v-else class="text-gray-400 text-sm font-bold uppercase tracking-wider mt-2 block">IDLE</span>
+
+                <span v-else-if="log.status === 'Idle'" class="text-gray-400 text-sm font-bold uppercase tracking-wider mt-2 block">IDLE</span>
+                
+                <svg v-else class="w-8 h-8 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path>
+                </svg>
               </td>
               <td class="p-4 font-semibold text-sm text-red-600 leading-relaxed">
-                {{ formatHumanAction(log.component, log.action) }}
+                {{ formatHumanAction(log) }}
               </td>
             </tr>
           </tbody>
@@ -140,7 +143,6 @@ const selectedMachine = ref('GO-000002');
 const isOnlineRunning = ref(false);
 let connection = null;
 
-// Human-friendly translations for technical actions 
 const humanizeMap = {
   'WiFi Connectivity': 'The machine lost internet. Please restart the Wi-Fi router or check the password.',
   'Weighing Tank (Ultrasonic)': 'The tank depth sensor is blocked. Please wipe the sensor inside the tank with a dry cloth.',
@@ -150,12 +152,16 @@ const humanizeMap = {
   'Door Sensors': 'The door appears to be open. Please ensure all machine doors are tightly closed and locked.'
 };
 
-const formatHumanAction = (component, rawAction) => {
-  if (!rawAction) return "";
-  return humanizeMap[component] || rawAction;
+// UPDATED: Now checks status first, and uses our custom map even if backend action is empty
+const formatHumanAction = (log) => {
+  // Only show action text if the test actually failed
+  if (log.status !== 'FAIL' && log.status !== 'X') {
+    return "";
+  }
+  // Return mapped text OR backend text OR default fallback
+  return humanizeMap[log.component] || log.action || "Component failed check. Please inspect manually.";
 };
 
-// Default setup
 const onlineLogs = ref([
   { no: 1, type: 'Online', component: 'WiFi Connectivity', checking: 'WiFi connection status', status: 'Idle', action: '' },
   { no: 2, type: 'Online', component: 'Weighing Tank (Ultrasonic)', checking: 'Object depth / Ultrasonic reading', status: 'Idle', action: '' },
@@ -174,7 +180,6 @@ const physicalLogs = ref([
   { no: 6, type: 'Physical', component: 'Valve', checking: 'Verify valve actuates correctly', isChecked: false }
 ]);
 
-// Trigger Startup diagnostics on Pi
 const triggerOnlineDiagnostics = async () => {
   isOnlineRunning.value = true;
   onlineLogs.value.forEach(log => {
@@ -192,7 +197,6 @@ const triggerOnlineDiagnostics = async () => {
   }
 };
 
-// Trigger Physical part test
 const testPhysicalComponent = async (componentName) => {
   try {
     await fetch(`http://localhost:5137/api/machine/${selectedMachine.value}/trigger-physical/${encodeURIComponent(componentName)}`, {
@@ -204,7 +208,6 @@ const testPhysicalComponent = async (componentName) => {
   }
 };
 
-// Submit physical report to Backend
 const submitPhysicalChecks = async () => {
   const report = {
     machineId: selectedMachine.value,
@@ -223,7 +226,6 @@ const submitPhysicalChecks = async () => {
 
     if(response.ok) {
       alert('✅ Physical check report submitted successfully!');
-      // Clear checkboxes after success
       physicalLogs.value.forEach(log => log.isChecked = false);
     }
   } catch (error) {
@@ -232,7 +234,6 @@ const submitPhysicalChecks = async () => {
   }
 };
 
-// SignalR connection setup
 onMounted(async () => {
   connection = new signalR.HubConnectionBuilder()
     .withUrl("http://localhost:5137/machineHub")
@@ -242,12 +243,11 @@ onMounted(async () => {
   connection.on("ReceiveDiagnosticLog", (log) => {
     if (log.machineId !== selectedMachine.value) return;
 
-    if (log.status === '☑' || log.status === 'IN_PROGRESS') {
-      log.action = "";
-    }
-
     if (log.type === 'Online') {
-      const existingIndex = onlineLogs.value.findIndex(x => x.component === log.component);
+      // UPDATED: Catch old Python name and map it to new Vue name automatically
+      const targetComponent = log.component === 'Has WiFi?' ? 'WiFi Connectivity' : log.component;
+      
+      const existingIndex = onlineLogs.value.findIndex(x => x.component === targetComponent);
       if (existingIndex !== -1) {
         onlineLogs.value[existingIndex].status = log.status;
         onlineLogs.value[existingIndex].action = log.action;
@@ -268,7 +268,6 @@ onMounted(async () => {
 });
 
 watch(selectedMachine, () => {
-  // Reset logs when switching machines
   onlineLogs.value.forEach(log => {
     log.status = 'Idle';
     log.action = '';
