@@ -563,7 +563,7 @@ def reconnect_forever():
             
 def on_close():
     print("[CLIENT] ❌ Disconnected from server")
-    reconnect_forever()
+    #reconnect_forever()
     
 def on_collector_end():
     print("[SERVER] CollectorEnd received. Stopping machine...")
@@ -1206,7 +1206,7 @@ def customer_cycle():
         # ---------------------------------------------------------
         if mega_ser.in_waiting:
             msg = mega_ser.readline().decode().strip()
-            if msg == "door_closed":
+            if msg == "door_closed" or msg == "doors_locked":
                 if auto_drain_active:
                     send_to_arduino("pump_now")
                     time.sleep(0.2)
@@ -1340,7 +1340,8 @@ def main():
     threading.Thread(target=global_auto_drain_monitor, daemon=True).start()
     threading.Thread(target=wiper_monitor_loop, daemon=True).start()
 
-    run_online_diagnostics(tared)
+    # Pushed to a background thread so 404 timeouts don't block the startup
+    threading.Thread(target=run_online_diagnostics, args=(tared,), daemon=True).start()
 
     while True:
         wd.kick()
