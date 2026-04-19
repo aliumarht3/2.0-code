@@ -1,628 +1,208 @@
-// LEVEL_FINAL_COMBINED.ino
-// GoHijau Smart Control – Advanced Sensors + L298N Auto Door (Side B) + Smoothed Ultrasonic
-
 #include <NewPing.h>
+
+// =====================================================
+// RESERVOIR ULTRASONIC CALIBRATION SKETCH
+// For one sensor only: ULTRASONIC_RES
+// =====================================================
 
 // -----------------------------
 // Pin Configuration
 // -----------------------------
-#define RED_LED 9
-#define GREEN_LED 8
-#define DOOR_LOCK 22
-#define PUMP_RELAY 24
-#define ULTRASONIC_SMALL_TRIG 10
-#define ULTRASONIC_SMALL_ECHO 11
 #define ULTRASONIC_RES_TRIG 12
 #define ULTRASONIC_RES_ECHO 13
-#define DOOR_SENSOR_TOP 23
-#define DOOR_SENSOR_GPIO2 7
-#define DOOR_SENSOR_GPIO3 6
-#define PUMP_GPIO2 25
-#define DOOR_LOCK_2 26
-#define DOOR_LOCK_3 27
-
-// --- HARDWARE PINS ---
-#define TURBIDITY_PIN A0
-#define ULTRASONIC_JUNK_TRIG 4
-#define ULTRASONIC_JUNK_ECHO 5
-#define DIVERTER_RELAY 28 // Relay to switch flow to the junk tank
 
 // -----------------------------
-// UPDATED L298N MOTOR PINS (SIDE B)
-// -----------------------------
-#define DOOR_LIMIT_SWITCH   36    // Limit Switch
-#define L298N_ENB           44    // Speed Control (PWM)
-#define L298N_IN3           40    // Direction Pin 1
-#define L298N_IN4           42    // Direction Pin 2
-
-// -----------------------------
-// Constants
+// Sensor Limits
 // -----------------------------
 #define MAX_DISTANCE 200
-#define SMALL_TANK_THRESHOLD 10
-#define RESERVOIR_HIGH 20
-#define RESERVOIR_HIGH_HIGH 13
-#define JUNK_TANK_THRESHOLD 15  
-#define FINAL_WEIGHT_THRESHOLD 0.25
+#define RES_MIN_VALID_CM 2.0
+#define RES_MAX_VALID_CM 200.0
 
 // -----------------------------
-// AUTO DOOR TUNING (LOWER SPEED)
+// Calibration Constants
+// CHANGE THESE LATER AFTER HAND TEST
 // -----------------------------
-#define AUTO_DOOR_OPEN_PWM         50  // Lower speed (0-255 range)
-#define AUTO_DOOR_CLOSE_PWM        50  // Slightly lower for closing safety
-#define AUTO_DOOR_OPEN_TIMEOUT_MS  10000UL // Increased timeout for slower movement
-#define AUTO_DOOR_CLOSE_TIMEOUT_MS 10000UL
+#define RES_EMPTY_CM 80.0     // distance when tank is low/empty
+#define RES_FULL_CM 10.0      // distance when tank is full/safe max
 
-NewPing ultrasonicSmall(ULTRASONIC_SMALL_TRIG, ULTRASONIC_SMALL_ECHO, MAX_DISTANCE);
+#define RES_WARNING_CM 20.0   // high warning zone
+#define RES_CRITICAL_CM 13.0  // high-high / overflow warning
+
+// -----------------------------
+// Smoothing Settings
+// -----------------------------
+const int RES_SAMPLES = 7;
+const int RES_SAMPLE_DELAY_MS = 30;
+
+// -----------------------------
+// Live Output
+// -----------------------------
+bool liveMode = false;
+unsigned long lastLivePrint = 0;
+const unsigned long LIVE_INTERVAL_MS = 1000;
+
+// -----------------------------
+// Object
+// -----------------------------
 NewPing ultrasonicRes(ULTRASONIC_RES_TRIG, ULTRASONIC_RES_ECHO, MAX_DISTANCE);
-NewPing ultrasonicJunk(ULTRASONIC_JUNK_TRIG, ULTRASONIC_JUNK_ECHO, MAX_DISTANCE); 
-
-// -----------------------------
-// State Variables
-// -----------------------------
-bool pouringActive = false;
-bool transferInProgress = false;
-bool cycleActive = false;
-bool collectorModeActive = false;
-bool ledBlinkState = false;
-unsigned long lastBlinkTime = 0;
-const unsigned long blinkInterval = 500;
-bool globalOverflowDetected = false;
-bool waitingForPump = false;
-unsigned long ledFreezeUntil = 0;
-bool technicianMode = false;
-bool pythonReady = false;
-
-enum AutoDoorState {
-  AUTO_DOOR_CLOSED,
-  AUTO_DOOR_OPENING,
-  AUTO_DOOR_OPEN,
-  AUTO_DOOR_CLOSING,
-  AUTO_DOOR_FAULT
-};
-
-AutoDoorState autoDoorState = AUTO_DOOR_FAULT;
-unsigned long autoDoorStartTime = 0;
-
-// -----------------------------
-// Keep LED red while waiting for pump handshake
-// -----------------------------
-void keepLedRed() {
-  if (waitingForPump || millis() < ledFreezeUntil) {
-    digitalWrite(RED_LED, LOW);
-    digitalWrite(GREEN_LED, HIGH);
-  }
-}
-
-// -----------------------------
-// Setup
-// -----------------------------
-void setup() {
-  Serial.begin(9600);
-
-  pinMode(RED_LED, OUTPUT);
-  pinMode(GREEN_LED, OUTPUT);
-  pinMode(DOOR_LOCK, OUTPUT);
-  pinMode(PUMP_RELAY, OUTPUT);
-  pinMode(DOOR_SENSOR_TOP, INPUT_PULLUP);
-  pinMode(DOOR_SENSOR_GPIO2, INPUT_PULLUP);
-  pinMode(DOOR_SENSOR_GPIO3, INPUT_PULLUP);
-  pinMode(PUMP_GPIO2, OUTPUT);
-  pinMode(DOOR_LOCK_2, OUTPUT);
-  pinMode(DOOR_LOCK_3, OUTPUT);
-  pinMode(DIVERTER_RELAY, OUTPUT);
-
-  // New L298N Side B Setup
-  pinMode(DOOR_LIMIT_SWITCH, INPUT_PULLUP);
-  pinMode(L298N_ENB, OUTPUT);
-  pinMode(L298N_IN3, OUTPUT);
-  pinMode(L298N_IN4, OUTPUT);
-  
-  // Normal LED & Relay logic
-  digitalWrite(RED_LED, HIGH);
-  digitalWrite(GREEN_LED, LOW);    
-  digitalWrite(DOOR_LOCK, HIGH);   
-  digitalWrite(PUMP_RELAY, LOW);
-  digitalWrite(PUMP_GPIO2, LOW);
-  digitalWrite(DOOR_LOCK_2, HIGH);
-  digitalWrite(DOOR_LOCK_3, HIGH);
-  digitalWrite(DIVERTER_RELAY, LOW);
-
-  autoDoorMotorStop();
-
-  if (isAutoDoorClosed()) autoDoorState = AUTO_DOOR_CLOSED;
-  else if (isAutoDoorOpen()) autoDoorState = AUTO_DOOR_OPEN;
-  else autoDoorState = AUTO_DOOR_FAULT;
-
-  Serial.println("=== GoHijau FULL VERSION – L298N (Side B) + Smooth US ===");
-  Serial.println("=== Waiting for Python Ready signal ===");
-}
-
-// -----------------------------
-// Main Loop
-// -----------------------------
-void loop() {
-  if (!pythonReady) {
-    digitalWrite(RED_LED, LOW);
-    digitalWrite(GREEN_LED, HIGH);   
-    delay(200);
-    if (Serial.available()) {
-      String cmd = Serial.readStringUntil('\n');
-      cmd.trim();
-      if (cmd == "PYTHON_READY") {
-        pythonReady = true;
-        Serial.println("PYTHON_READY_ACK");
-        digitalWrite(RED_LED, LOW);
-        digitalWrite(GREEN_LED, HIGH);
-      }
-    }
-    return; 
-  }
-  
-  while (Serial.available()) {
-    String command = Serial.readStringUntil('\n');
-    command.trim();
-
-    if (command == "get_door_state") {
-        int raw = digitalRead(DOOR_SENSOR_TOP);
-        if (raw == LOW) Serial.println("door_closed");
-        else Serial.println("door_opened");
-        continue;   
-    }
-
-    // --- Telemetry Request from Python ---
-    else if (command == "get_telemetry") {
-        int turbValue = analogRead(TURBIDITY_PIN);
-        float junkDist = ultrasonicJunk.ping_cm();
-        delay(35); 
-        float resDist = ultrasonicRes.ping_cm();
-        
-        Serial.print("telemetry:");
-        Serial.print(turbValue); Serial.print(",");
-        Serial.print(junkDist); Serial.print(",");
-        Serial.println(resDist);
-        continue;
-    }
-
-    // ------------------------------------
-    // HARDWARE STARTUP DIAGNOSIS COMMANDS
-    // ------------------------------------
-    else if (command == "CHECK_ULTRASONIC_SMALL") {
-      float smallDist = ultrasonicSmall.ping_cm();
-      if (smallDist == 0) Serial.println("CHECK_ULTRASONIC_SMALL:NO_READING");
-      else if (smallDist <= SMALL_TANK_THRESHOLD) Serial.println("CHECK_ULTRASONIC_SMALL:OVERFLOW");
-      else Serial.println("CHECK_ULTRASONIC_SMALL:OK");
-    }
-    else if (command == "CHECK_ULTRASONIC_RES") {
-      float resDist = ultrasonicRes.ping_cm();
-      if (resDist == 0) Serial.println("CHECK_ULTRASONIC_RES:NO_READING");
-      else if (resDist <= RESERVOIR_HIGH_HIGH) Serial.println("CHECK_ULTRASONIC_RES:HIGH_HIGH");
-      else if (resDist <= RESERVOIR_HIGH) Serial.println("CHECK_ULTRASONIC_RES:HIGH");
-      else Serial.println("CHECK_ULTRASONIC_RES:OK");
-    }
-    else if (command == "CHECK_DOOR_GPIO3") {
-      int raw = digitalRead(DOOR_SENSOR_GPIO3);
-      if (raw == LOW) Serial.println("CHECK_DOOR_GPIO3:CLOSED");
-      else Serial.println("CHECK_DOOR_GPIO3:OPEN");
-    }
-
-    // Python LED control commands
-    else if (command == "LED_GREEN_ON") {
-      digitalWrite(RED_LED, HIGH);
-      digitalWrite(GREEN_LED, LOW);
-      Serial.println("LED_GREEN_ON_ACK");
-    }
-
-    // ------------------------------------
-    // L298N Motorized Door Commands 
-    // ------------------------------------
-    else if (command == "AUTO_DOOR_OPEN" || command == "unlock" || command == "unlock_left") { 
-      startAutoDoorOpen(); 
-      pouringActive = true;
-      cycleActive = true;
-      digitalWrite(DOOR_LOCK, LOW); // Trigger standard lock mechanism as backup/sync
-      digitalWrite(RED_LED, LOW);
-      digitalWrite(GREEN_LED, HIGH);
-    }
-    else if (command == "AUTO_DOOR_CLOSE" || command == "DOOR_MOTOR_CLOSE") { 
-      startAutoDoorClose(); 
-    }
-    else if (command == "AUTO_DOOR_STATUS") {
-      if (isAutoDoorClosed()) Serial.println("door_closed");
-      else if (isAutoDoorOpen()) Serial.println("door_opened");
-      else if (autoDoorState == AUTO_DOOR_FAULT) Serial.println("door_fault");
-      else Serial.println("door_moving");
-    }
-
-    // Tech Door
-    else if (command == "unlock_tech") {
-      digitalWrite(DOOR_LOCK_3, LOW);
-      digitalWrite(RED_LED, LOW);
-      digitalWrite(GREEN_LED, HIGH);
-      Serial.println("door_opened_tech");
-      technicianMode = true;
-      cycleActive = true;
-    }
-    
-    // Global Lock / Stop Commands
-    else if (command == "LOCK") {
-      digitalWrite(PUMP_RELAY, LOW);
-      digitalWrite(DIVERTER_RELAY, LOW); 
-      digitalWrite(DOOR_LOCK, HIGH);
-      digitalWrite(DOOR_LOCK_2, HIGH);
-      digitalWrite(DOOR_LOCK_3, HIGH);
-      digitalWrite(GREEN_LED, HIGH);
-      digitalWrite(RED_LED, LOW);
-      pouringActive = false;
-      transferInProgress = false;
-      cycleActive = false;
-      technicianMode = false;
-      Serial.println("doors_locked");
-    }
-    
-    // Valve & Pump Commands
-    else if (command == "PIN25_ON") {
-      digitalWrite(PUMP_GPIO2, HIGH);
-      digitalWrite(DOOR_LOCK_2, LOW);
-      collectorModeActive = true;
-      Serial.println("– Pin 25 ON");
-    }
-    else if (command == "PIN25_OFF") {
-      digitalWrite(PUMP_GPIO2, LOW);
-      digitalWrite(DOOR_LOCK_2, HIGH);
-      collectorModeActive = false;
-      digitalWrite(RED_LED, LOW);
-      digitalWrite(GREEN_LED, LOW);
-      Serial.println("– Pin 25 OFF");
-    }
-    else if (command == "excess_pump_start") {
-      digitalWrite(PUMP_RELAY, HIGH);
-      Serial.println("excess_pump_started");
-    }
-    else if (command == "excess_pump_stop") {
-      digitalWrite(PUMP_RELAY, LOW);
-      Serial.println("excess_pump_stoped");
-    }
-
-    // Pump Handshakes
-    else if (command == "pump_now") {
-      if (waitingForPump && !transferInProgress) {
-        Serial.println("start_transfer");
-        digitalWrite(PUMP_RELAY, HIGH);
-        transferInProgress = true;
-        waitingForPump = false;
-        digitalWrite(GREEN_LED, HIGH);
-        digitalWrite(RED_LED, LOW);
-      }
-    }
-    else if (command == "divert_to_junk") {
-      if (waitingForPump && !transferInProgress) {
-        Serial.println("diverting_to_junk");
-        digitalWrite(DIVERTER_RELAY, HIGH);
-        digitalWrite(PUMP_RELAY, HIGH);
-        transferInProgress = true;
-        waitingForPump = false;
-        digitalWrite(GREEN_LED, HIGH);
-        digitalWrite(RED_LED, LOW);
-      }
-    }
-
-    // --- ALIGNED DIAGNOSTIC/MANUAL TEST COMMANDS ---
-    else if (command == "TEST_LOCK1_ON")  { digitalWrite(DOOR_LOCK, LOW); Serial.println("TEST_LOCK1_ON_ACK"); }
-    else if (command == "TEST_LOCK1_OFF") { digitalWrite(DOOR_LOCK, HIGH); Serial.println("TEST_LOCK1_OFF_ACK"); }
-    else if (command == "TEST_LOCK2_ON")  { digitalWrite(DOOR_LOCK_2, LOW); Serial.println("TEST_LOCK2_ON_ACK"); }
-    else if (command == "TEST_LOCK2_OFF") { digitalWrite(DOOR_LOCK_2, HIGH);Serial.println("TEST_LOCK2_OFF_ACK"); }
-    else if (command == "TEST_LOCK3_ON")  { digitalWrite(DOOR_LOCK_3, LOW); Serial.println("TEST_LOCK3_ON_ACK"); }
-    else if (command == "TEST_LOCK3_OFF") { digitalWrite(DOOR_LOCK_3, HIGH);Serial.println("TEST_LOCK3_OFF_ACK"); }
-    else if (command == "TEST_PUMP_ON")   { digitalWrite(PUMP_RELAY, HIGH); Serial.println("TEST_PUMP_ON_ACK"); }
-    else if (command == "TEST_PUMP_OFF")  { digitalWrite(PUMP_RELAY, LOW);  Serial.println("TEST_PUMP_OFF_ACK"); }
-    else if (command == "TEST_VALVE_ON")  { digitalWrite(PUMP_GPIO2, HIGH); Serial.println("TEST_VALVE_ON_ACK"); }
-    else if (command == "TEST_VALVE_OFF") { digitalWrite(PUMP_GPIO2, LOW);  Serial.println("TEST_VALVE_OFF_ACK"); }
-    
-    // --- WIPER AND INTERNET DUMMY ACKS ---
-    else if (command == "START_WIPER_ROUTINE" || command == "DUMMY_WIPER_ON") { Serial.println("WIPER_ON_ACK"); }
-    else if (command == "DUMMY_WIPER_OFF") { Serial.println("WIPER_OFF_ACK"); }
-    else if (command == "DUMMY_DOOR_MOTOR_ON") { Serial.println("MOTOR_ON_ACK"); }
-    else if (command == "DUMMY_DOOR_MOTOR_OFF") { Serial.println("MOTOR_OFF_ACK"); }
-    else if (command == "HAS_INTERNET") { Serial.println("INTERNET_OK"); }
-    else if (command == "NO_INTERNET") { Serial.println("INTERNET_NO"); }
-
-    else if (command == "get_turbidity") {
-      int turbidityRaw = analogRead(TURBIDITY_PIN);
-      Serial.print("turbidity:");
-      Serial.println(turbidityRaw);
-    }
-
-    // --- UPGRADED: Gets smoothed distance of small tank for Python weight calculation ---
-    else if (command == "get_small_dist") {
-      float dist = readUltrasonicSmallSmoothed(); 
-      Serial.print("small_dist:");
-      Serial.println(dist);
-    }
-    
-    else if (command.startsWith("weight:")) {
-      if (transferInProgress) {
-        float weight = command.substring(7).toFloat();
-        if (weight <= FINAL_WEIGHT_THRESHOLD) {
-          digitalWrite(PUMP_RELAY, LOW);
-          digitalWrite(DIVERTER_RELAY, LOW);
-          Serial.println("transfer_done");
-          transferInProgress = false;
-          digitalWrite(GREEN_LED, LOW);
-          digitalWrite(RED_LED, HIGH);
-        }
-      }
-    }
-  }
-
-  if (technicianMode) {
-    updateAutoDoor();
-    delay(100);
-    return;
-  }
-
-  // =============================================================
-  // Global Overflow Logic (Includes Junk Tank)
-  // =============================================================
-  static int overflowCount = 0;
-  const int requiredSamples = 10; 
-  static bool collectorCheckPending = false;
-  static unsigned long collectorStartTime = 0;
-
-  float smallDist = ultrasonicSmall.ping_cm();
-  delay(35);
-  float resDist   = ultrasonicRes.ping_cm();
-  delay(35);
-  float junkDist  = ultrasonicJunk.ping_cm();
-
-  bool overflowNow = ((smallDist > 0 && smallDist <= SMALL_TANK_THRESHOLD) ||
-                      (resDist > 0 && resDist <= RESERVOIR_HIGH_HIGH) ||
-                      (junkDist > 0 && junkDist <= JUNK_TANK_THRESHOLD));
-
-  if (overflowNow) {
-    if (overflowCount < requiredSamples) overflowCount++;
-  } else {
-    if (overflowCount > 0) overflowCount--;
-  }
-
-  if (overflowCount >= requiredSamples) {
-    globalOverflowDetected = true;
-  }
-
-  bool doorPriority = (pouringActive || cycleActive);
-  if (doorPriority) {
-    digitalWrite(RED_LED, LOW);   
-    digitalWrite(GREEN_LED, HIGH);
-  }
-
-  bool collectorActive = (digitalRead(PUMP_GPIO2) == HIGH);
-
-  if (collectorActive && !collectorCheckPending && globalOverflowDetected) {
-    digitalWrite(RED_LED, HIGH);
-    digitalWrite(GREEN_LED, LOW); 
-    collectorStartTime = millis();
-    collectorCheckPending = true;
-  }
-
-  if (collectorActive && collectorCheckPending && millis() - collectorStartTime >= 5000UL) {
-    collectorCheckPending = false;
-    smallDist = ultrasonicSmall.ping_cm();
-    delay(35);
-    resDist   = ultrasonicRes.ping_cm();
-    delay(35);
-    junkDist  = ultrasonicJunk.ping_cm();
-
-    bool stillOverflow = ((smallDist > 0 && smallDist <= SMALL_TANK_THRESHOLD) ||
-                          (resDist > 0 && resDist <= RESERVOIR_HIGH_HIGH) ||
-                          (junkDist > 0 && junkDist <= JUNK_TANK_THRESHOLD));
-
-    if (stillOverflow) {
-      globalOverflowDetected = true;
-      digitalWrite(RED_LED, LOW);
-      digitalWrite(GREEN_LED, HIGH);
-    } else {
-      globalOverflowDetected = false;
-      overflowCount = 0;
-      digitalWrite(RED_LED, HIGH);
-      digitalWrite(GREEN_LED, LOW);
-    }
-  }
-
-  if (!collectorActive) {
-    collectorCheckPending = false;
-  }
-
-  if (!doorPriority) {
-    if (globalOverflowDetected) {
-      digitalWrite(RED_LED, LOW);
-      digitalWrite(GREEN_LED, HIGH);
-    } else {
-      digitalWrite(RED_LED, HIGH);
-      digitalWrite(GREEN_LED, LOW);
-    }
-  }
-
-  // Active Pouring Hardware Safeguards
-  if (pouringActive) {
-    if (smallDist > 0 && smallDist <= SMALL_TANK_THRESHOLD) {
-      Serial.println("overflow_small_tank");
-      pouringActive = false;
-      startAutoDoorClose();
-    }
-    if (resDist > 0) {
-      if (resDist <= RESERVOIR_HIGH_HIGH) {
-        Serial.println("overflow_res_high_high");
-        pouringActive = false;
-        startAutoDoorClose();
-      }
-    }
-    if (junkDist > 0 && junkDist <= JUNK_TANK_THRESHOLD) {
-      Serial.println("overflow_junk_tank");
-      pouringActive = false;
-      startAutoDoorClose();
-    }
-  }
-
-  if (collectorModeActive) {
-    unsigned long currentTime = millis();
-    if (currentTime - lastBlinkTime >= blinkInterval) {
-      ledBlinkState = !ledBlinkState;
-      digitalWrite(RED_LED, ledBlinkState);
-      digitalWrite(GREEN_LED, ledBlinkState);
-      lastBlinkTime = currentTime;
-    }
-  } else if (!globalOverflowDetected && !waitingForPump) {
-    updateDoorIndicator();
-  }
-
-  updateAutoDoor();
-  keepLedRed();
-  delay(100);
-}
 
 // =====================================================
-// HELPER FUNCTIONS
+// Helper Functions
 // =====================================================
 
-void updateDoorIndicator() {
-  if (cycleActive || collectorModeActive || waitingForPump) return;
-  bool techDoorClosed  = (digitalRead(DOOR_SENSOR_GPIO3) == LOW);
-
-  if (!isAutoDoorClosed() || !techDoorClosed) {
-    digitalWrite(GREEN_LED, HIGH);
-    digitalWrite(RED_LED, LOW);
-  } 
-  else {
-    digitalWrite(GREEN_LED, LOW);
-    digitalWrite(RED_LED, HIGH);
-  }
-}
-
-// -----------------------------
-// Smoothed Ultrasonic Logic
-// -----------------------------
-float readUltrasonicSmallSmoothed() {
-  const int SAMPLES = 7;
-  const int SAMPLE_DELAY_MS = 30;
+float readUltrasonicResRawCm() {
   float sum = 0;
   int validCount = 0;
 
-  for (int i = 0; i < SAMPLES; i++) {
-    float d = ultrasonicSmall.ping_cm();
+  for (int i = 0; i < RES_SAMPLES; i++) {
+    float d = ultrasonicRes.ping_cm();
 
-    if (d >= 2.0 && d <= 100.0) { 
+    if (d >= RES_MIN_VALID_CM && d <= RES_MAX_VALID_CM) {
       sum += d;
       validCount++;
     }
-    delay(SAMPLE_DELAY_MS);
+
+    delay(RES_SAMPLE_DELAY_MS);
   }
 
-  if (validCount == 0) return 0.0; 
+  if (validCount == 0) return -1.0;
   return sum / validCount;
 }
 
-// -----------------------------
-// L298N AUTO DOOR LOGIC (SIDE B)
-// -----------------------------
-bool limitSwitchActive() {
-  return digitalRead(DOOR_LIMIT_SWITCH) == LOW; 
-}
-bool gpio3ClosedConfirm() {
-  return digitalRead(DOOR_SENSOR_GPIO3) == LOW; 
-}
-bool gpio2OpenConfirm() {
-  return digitalRead(DOOR_SENSOR_GPIO2) == LOW; 
-}
-bool topOpenConfirm() {
-  return digitalRead(DOOR_SENSOR_TOP) == LOW;    
-}
-bool isAutoDoorClosed() {
-  return limitSwitchActive() && gpio3ClosedConfirm();
-}
-bool isAutoDoorOpen() {
-  return gpio2OpenConfirm() && topOpenConfirm();
+int reservoirLevelPercent(float distanceCm) {
+  if (distanceCm < 0) return -1;
+
+  float clamped = distanceCm;
+  if (clamped > RES_EMPTY_CM) clamped = RES_EMPTY_CM;
+  if (clamped < RES_FULL_CM)  clamped = RES_FULL_CM;
+
+  // Sensor is at top:
+  // bigger distance = lower water
+  // smaller distance = higher water
+  float pct = ((RES_EMPTY_CM - clamped) / (RES_EMPTY_CM - RES_FULL_CM)) * 100.0;
+
+  if (pct < 0) pct = 0;
+  if (pct > 100) pct = 100;
+
+  return (int)(pct + 0.5);
 }
 
-void autoDoorMotorStop() {
-  analogWrite(L298N_ENB, 0);
-  digitalWrite(L298N_IN3, LOW);
-  digitalWrite(L298N_IN4, LOW);
+String reservoirWarningState(float distanceCm) {
+  if (distanceCm < 0) return "NO_READING";
+  if (distanceCm <= RES_CRITICAL_CM) return "HIGH_HIGH";
+  if (distanceCm <= RES_WARNING_CM)  return "HIGH";
+  return "NORMAL";
 }
 
-void autoDoorMotorOpen() {
-  // OPEN: Reverse Direction
-  digitalWrite(L298N_IN3, LOW);
-  digitalWrite(L298N_IN4, HIGH);
-  analogWrite(L298N_ENB, AUTO_DOOR_OPEN_PWM);
+String reservoirBand10(float distanceCm) {
+  int pct = reservoirLevelPercent(distanceCm);
+  if (pct < 0) return "NO_READING";
+  if (pct >= 100) return "100";
+  if (pct >= 90) return "90";
+  if (pct >= 80) return "80";
+  if (pct >= 70) return "70";
+  if (pct >= 60) return "60";
+  if (pct >= 50) return "50";
+  if (pct >= 40) return "40";
+  if (pct >= 30) return "30";
+  if (pct >= 20) return "20";
+  if (pct >= 10) return "10";
+  return "0";
 }
 
-void autoDoorMotorClose() {
-  // CLOSE: Forward Direction
-  digitalWrite(L298N_IN3, HIGH);
-  digitalWrite(L298N_IN4, LOW);
-  analogWrite(L298N_ENB, AUTO_DOOR_CLOSE_PWM);
+void printReservoirReport(float d) {
+  int pct = reservoirLevelPercent(d);
+  String state = reservoirWarningState(d);
+  String band = reservoirBand10(d);
+
+  Serial.print("RES_REPORT:");
+  Serial.print("RAW_CM=");
+  Serial.print(d, 1);
+  Serial.print(",LEVEL=");
+  Serial.print(pct);
+  Serial.print("%");
+  Serial.print(",BAND=");
+  Serial.print(band);
+  Serial.print("%");
+  Serial.print(",STATE=");
+  Serial.println(state);
 }
 
-void startAutoDoorOpen() {
-  if (autoDoorState == AUTO_DOOR_OPEN || autoDoorState == AUTO_DOOR_OPENING) return;
-  autoDoorStartTime = millis();
-  autoDoorMotorOpen();
-  autoDoorState = AUTO_DOOR_OPENING;
-  Serial.println("door_opening");
+// =====================================================
+// Setup
+// =====================================================
+
+void setup() {
+  Serial.begin(9600);
+  Serial.println("=== Reservoir Ultrasonic Calibration Mode ===");
+  Serial.println("Commands:");
+  Serial.println("  GET_RES_RAW");
+  Serial.println("  GET_RES_STATUS");
+  Serial.println("  CHECK_ULTRASONIC_RES");
+  Serial.println("  LIVE_RES_ON");
+  Serial.println("  LIVE_RES_OFF");
 }
 
-void startAutoDoorClose() {
-  if (autoDoorState == AUTO_DOOR_CLOSED || autoDoorState == AUTO_DOOR_CLOSING) return;
-  autoDoorStartTime = millis();
-  autoDoorMotorClose();
-  autoDoorState = AUTO_DOOR_CLOSING;
-  Serial.println("door_closing");
-}
+// =====================================================
+// Loop
+// =====================================================
 
-void updateAutoDoor() {
-  switch (autoDoorState) {
-    case AUTO_DOOR_OPENING:
-      if (millis() - autoDoorStartTime > AUTO_DOOR_OPEN_TIMEOUT_MS) {
-        autoDoorMotorStop();
-        autoDoorState = AUTO_DOOR_FAULT;
-        Serial.println("door_fault_open_timeout");
+void loop() {
+  // -------- Serial Commands --------
+  if (Serial.available()) {
+    String command = Serial.readStringUntil('\n');
+    command.trim();
+
+    if (command == "GET_RES_RAW") {
+      float d = readUltrasonicResRawCm();
+      Serial.print("ULTRASONIC_RES_RAW:");
+      Serial.println(d, 1);
+    }
+
+    else if (command == "GET_RES_STATUS") {
+      float d = readUltrasonicResRawCm();
+      printReservoirReport(d);
+    }
+
+    else if (command == "CHECK_ULTRASONIC_RES") {
+      float d = readUltrasonicResRawCm();
+
+      if (d < 0) {
+        Serial.println("CHECK_ULTRASONIC_RES:NO_READING");
+      } else {
+        String state = reservoirWarningState(d);
+        int pct = reservoirLevelPercent(d);
+
+        Serial.print("CHECK_ULTRASONIC_RES:");
+        if (state == "NORMAL") {
+          Serial.print("OK");
+        } else {
+          Serial.print(state);
+        }
+
+        Serial.print(",RAW_CM=");
+        Serial.print(d, 1);
+        Serial.print(",LEVEL=");
+        Serial.print(pct);
+        Serial.println("%");
       }
-      else if (isAutoDoorOpen()) {
-        autoDoorMotorStop();
-        autoDoorState = AUTO_DOOR_OPEN;
-        Serial.println("door_opened");
-      }
-      break;
+    }
 
-    case AUTO_DOOR_CLOSING:
-      if (millis() - autoDoorStartTime > AUTO_DOOR_CLOSE_TIMEOUT_MS) {
-        autoDoorMotorStop();
-        autoDoorState = AUTO_DOOR_FAULT;
-        Serial.println("door_fault_close_timeout");
-      }
-      else if (isAutoDoorClosed()) {
-        autoDoorMotorStop();
-        autoDoorState = AUTO_DOOR_CLOSED;
-        
-        // --- End of Pouring Cycle Sequence ---
-        pouringActive = false;
-        cycleActive = false;
-        transferInProgress = false;
-        
-        // Prepare machine for pumping
-        waitingForPump = true;
-        ledFreezeUntil = millis() + 3000;
-        
-        digitalWrite(DOOR_LOCK, HIGH);
-        digitalWrite(DOOR_LOCK_2, HIGH);
-        digitalWrite(DOOR_LOCK_3, HIGH);
-        digitalWrite(DIVERTER_RELAY, LOW); 
-        
-        Serial.println("door_closed"); 
-        Serial.println("doors_locked_waiting_for_pump"); // Legacy hook for python
-      }
-      break;
-      
-    default: break;
+    else if (command == "LIVE_RES_ON") {
+      liveMode = true;
+      Serial.println("LIVE_RES_ON_ACK");
+    }
+
+    else if (command == "LIVE_RES_OFF") {
+      liveMode = false;
+      Serial.println("LIVE_RES_OFF_ACK");
+    }
+  }
+
+  // -------- Live Mode --------
+  if (liveMode && millis() - lastLivePrint >= LIVE_INTERVAL_MS) {
+    lastLivePrint = millis();
+    float d = readUltrasonicResRawCm();
+    printReservoirReport(d);
   }
 }
