@@ -522,7 +522,7 @@ def send_status_loop():
     while True:
         try:
             if status_enabled:
-                hub_connection.send("SendStatus", ["GO-000002", "Active"])
+                hub_connection.send("SendStatus", ["GO-000001", "Active"])
         except Exception as e:
             print(f"[CLIENT] ⚠️ Failed to send status: {e}")
         time.sleep(5)
