@@ -90,7 +90,7 @@ DIAGNOSTICS_URL = "https://gallows-qualm-dazzler.ngrok-free.dev/api/machine/diag
 
 TOKEN = None
 pin25_on = False  
-machine_id = "GO-000001"
+machine_id = "GO-000001" 
 status_enabled = True
 auto_drain_active = False
 
@@ -194,15 +194,12 @@ def publish_manual_test_status(test_name, status):
     ui_status = "☑" if status == "DONE" else ("IN_PROGRESS" if status == "RUNNING" else "X")
     update_diagnostic_status(0, "Physical", comp_name, f"Manual Test: {status}", ui_status)
 
-def run_online_diagnostics(tared_status=True):
+def run_online_diagnostics():
     print("\n--- 🌐 STARTED ONLINE DIAGNOSTICS ---")
     tests = [
         {"no": 1, "comp": "Has WiFi?", "chk": "Connecting to 8.8.8.8:53"},
         {"no": 2, "comp": "Weighing Tank (Ultrasonic)", "chk": "Object depth / Ultrasonic reading"},
-        
-        # FIX: The "chk" text MUST exactly say "Weight / Load cell reading" for the UI to stop spinning!
-        {"no": 3, "comp": "Weighing Tank (Load Cell)", "chk": "Weight / Load cell reading"}, 
-        
+        {"no": 3, "comp": "Weighing Tank (Load Cell)", "chk": "Weight / Load cell reading"},
         {"no": 4, "comp": "Barrel", "chk": "Storage level / Ultrasonic reading"},
         {"no": 5, "comp": "Filter #1", "chk": "Flow & Turbidity status"},
         {"no": 6, "comp": "Door Sensors", "chk": "Relay input / Security status"}
@@ -231,8 +228,6 @@ def run_online_diagnostics(tared_status=True):
     try:
         test_weight = get_weight_from_sensor(samples=2)
         status_lc = "☑" if test_weight is not None else "X"
-        
-        # FIX: Also updated the "chk" text here to match!
         update_diagnostic_status(3, "Online", "Weighing Tank (Load Cell)", "Weight / Load cell reading", status_lc)
     except Exception as e:
         update_diagnostic_status(3, "Online", "Weighing Tank (Load Cell)", f"Error: {e}", "X")
@@ -299,7 +294,7 @@ def send_status_loop():
     global status_enabled
     while True:
         try:
-            if status_enabled: hub_connection.send("SendStatus", ["GO-000001", "Active"])
+            if status_enabled: hub_connection.send("SendStatus", [machine_id, "Active"])
         except Exception as e: pass
         time.sleep(5)
 
@@ -380,8 +375,8 @@ def get_weight_from_sensor(samples=3):
     global weight_read_in_progress
     weight_read_in_progress = True
     wd.kick()
-
     distances = []
+    
     for _ in range(samples):
         wd.kick()
         with mega_lock:
@@ -410,13 +405,11 @@ def get_weight_from_sensor(samples=3):
                 
                 if dist is not None and dist > 0: 
                     distances.append(dist)
-                    #print(f"📏 Ultrasonic Raw Depth: {dist} cm") # VISUAL FEEDBACK ADDED
-            except Exception as e: 
-                print(f"❌ Error reading weight: {e}")
+                    print(f"📏 Ultrasonic Raw Depth: {dist} cm")
+            except Exception as e: print(f"❌ Error reading weight: {e}")
         time.sleep(0.1)
 
     weight_read_in_progress = False
-
     if not distances: 
         print("⚠️ No valid echoes received from Ultrasonic.")
         return 0.0
@@ -424,11 +417,10 @@ def get_weight_from_sensor(samples=3):
     distances.sort()
     median = distances[len(distances) // 2]
     filtered = [d for d in distances if abs(d - median) <= 3.0]
-    if not filtered: 
-        filtered = distances
+    if not filtered: filtered = distances
     avg_dist = sum(filtered) / len(filtered)
 
-    print(f"📦 Filtered Depths: {filtered} cm -> Avg: {round(avg_dist,2)} cm") # VISUAL FEEDBACK ADDED
+    print(f"📦 Filtered Depths: {filtered} cm -> Avg: {round(avg_dist,2)} cm")
 
     if avg_dist >= SMALL_TANK_EMPTY_CM: return 0.0
     if avg_dist <= SMALL_TANK_FULL_CM: return MAX_OIL_KG
@@ -602,7 +594,6 @@ def customer_cycle():
         weight_live = get_weight_from_sensor()
         
         if weight_live is not None:
-            # ---> ADD THIS LINE BACK IN <---
             print(f"⚖️ Live weight while pouring: {weight_live} kg")
             
             if weight_live > 10.0:
@@ -717,6 +708,7 @@ def main():
     threading.Thread(target=global_auto_drain_monitor, daemon=True).start()
     threading.Thread(target=send_status_loop, daemon=True).start()
 
+    # Run diagnostics immediately on boot
     run_online_diagnostics()
 
     while True:
