@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("GoHijauLocalServer")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+56c740cab348d36004a5cc3259ce334c680df1c0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+ed1117a84f4d470138da16084ceb298956cab9e4")]
 [assembly: System.Reflection.AssemblyProductAttribute("GoHijauLocalServer")]
 [assembly: System.Reflection.AssemblyTitleAttribute("GoHijauLocalServer")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

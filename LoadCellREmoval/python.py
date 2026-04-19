@@ -199,7 +199,10 @@ def run_online_diagnostics(tared_status=True):
     tests = [
         {"no": 1, "comp": "Has WiFi?", "chk": "Connecting to 8.8.8.8:53"},
         {"no": 2, "comp": "Weighing Tank (Ultrasonic)", "chk": "Object depth / Ultrasonic reading"},
-        {"no": 3, "comp": "Weighing Tank (Load Cell)", "chk": "Weight / Ultrasonic conversion"}, # <--- CHANGED BACK
+        
+        # FIX: The "chk" text MUST exactly say "Weight / Load cell reading" for the UI to stop spinning!
+        {"no": 3, "comp": "Weighing Tank (Load Cell)", "chk": "Weight / Load cell reading"}, 
+        
         {"no": 4, "comp": "Barrel", "chk": "Storage level / Ultrasonic reading"},
         {"no": 5, "comp": "Filter #1", "chk": "Flow & Turbidity status"},
         {"no": 6, "comp": "Door Sensors", "chk": "Relay input / Security status"}
@@ -228,7 +231,9 @@ def run_online_diagnostics(tared_status=True):
     try:
         test_weight = get_weight_from_sensor(samples=2)
         status_lc = "☑" if test_weight is not None else "X"
-        update_diagnostic_status(3, "Online", "Weighing Tank (Load Cell)", "Weight / Ultrasonic conversion", status_lc)
+        
+        # FIX: Also updated the "chk" text here to match!
+        update_diagnostic_status(3, "Online", "Weighing Tank (Load Cell)", "Weight / Load cell reading", status_lc)
     except Exception as e:
         update_diagnostic_status(3, "Online", "Weighing Tank (Load Cell)", f"Error: {e}", "X")
 
