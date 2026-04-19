@@ -691,6 +691,18 @@ def publish_manual_test_status(test_name, status):
 # ------------------------------
 # TURBIDITY HELPERS
 # ------------------------------
+def classify_turbidity(raw_value):
+    """Convert raw turbidity into a quality label."""
+    if raw_value is None or raw_value < 0:
+        return "UNKNOWN"
+
+    if raw_value <= TURBIDITY_GOOD_MAX:
+        return "GOOD"
+    elif raw_value <= TURBIDITY_POOR_MAX:
+        return "POOR"
+    else:
+        return "WATER_CONTAMINATED"
+    
 def get_turbidity_from_arduino():
     try:
         with mega_lock:
