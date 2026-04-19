@@ -1108,10 +1108,7 @@ def internet_monitor_loop():
 # ------------------------------
 # WEIGHT READING (ULTRASONIC ESTIMATION)
 # ------------------------------
-def get_weight_from_sensor(samples=5):
-    """
-    Polls the Mega for small tank ultrasonic distance and converts to estimated weight.
-    """
+def get_weight_from_sensor(samples=3):
     global weight_read_in_progress
     weight_read_in_progress = True
     wd.kick()
@@ -1121,25 +1118,42 @@ def get_weight_from_sensor(samples=5):
         wd.kick()
         with mega_lock:
             try:
-                mega_ser.reset_input_buffer()
+                # 1. Safely read pending messages instead of deleting them!
+                while mega_ser.in_waiting:
+                    line = mega_ser.readline().decode(errors="ignore").strip()
+                    if line:
+                        if line.startswith("small_dist:"):
+                            pass # Skip old/stale weight data
+                        else:
+                            mega_message_queue.append(line) # Save door statuses!
+
+                # 2. Ask Mega for new distance
                 mega_ser.write(b"get_small_dist\n")
                 mega_ser.flush()
                 
                 start_wait = time.time()
                 dist = None
-                while time.time() - start_wait < 0.5:
+                
+                # 3. INCREASED TIMEOUT: The Arduino smoothing math takes ~380ms. 
+                # 1.5 seconds guarantees we don't timeout and miss the data.
+                while time.time() - start_wait < 1.5:
                     if mega_ser.in_waiting:
                         line = mega_ser.readline().decode(errors="ignore").strip()
+                        if not line: continue
+                        
                         if line.startswith("small_dist:"):
                             dist = float(line.replace("small_dist:", ""))
                             break
-                    time.sleep(0.05)
+                        else:
+                            # Save asynchronous updates (like door_closed)
+                            mega_message_queue.append(line)
+                            
+                    time.sleep(0.02)
                 
-                # Treat 0 as error/no echo
                 if dist is not None and dist > 0:
                     distances.append(dist)
             except Exception as e:
-                print(f"? Error reading ultrasonic weight: {e}")
+                print(f"❌ Error reading ultrasonic weight: {e}")
         time.sleep(0.1)
 
     weight_read_in_progress = False
@@ -1147,7 +1161,6 @@ def get_weight_from_sensor(samples=5):
     if not distances:
         return 0.0
 
-    # Sort and filter outliers
     distances.sort()
     median = distances[len(distances) // 2]
     filtered = [d for d in distances if abs(d - median) <= 3.0]
@@ -1155,13 +1168,9 @@ def get_weight_from_sensor(samples=5):
         filtered = distances
     avg_dist = sum(filtered) / len(filtered)
 
-    # Convert distance to weight
-    if avg_dist >= SMALL_TANK_EMPTY_CM:
-        return 0.0
-    if avg_dist <= SMALL_TANK_FULL_CM:
-        return MAX_OIL_KG
+    if avg_dist >= SMALL_TANK_EMPTY_CM: return 0.0
+    if avg_dist <= SMALL_TANK_FULL_CM: return MAX_OIL_KG
 
-    # Linear interpolation mapping (e.g., 40cm -> 0kg, 10cm -> 10kg)
     ratio = (SMALL_TANK_EMPTY_CM - avg_dist) / (SMALL_TANK_EMPTY_CM - SMALL_TANK_FULL_CM)
     weight = ratio * MAX_OIL_KG
     return round(weight, 3)
@@ -1486,12 +1495,24 @@ def customer_cycle():
     
     door_opened = False
     
+    # Check both the Message Queue AND the Serial pipeline for door_opened
     while time.time() - start_time < 60:
         wd.kick()
-        if mega_ser.in_waiting:
-            if mega_ser.readline().decode().strip() == "door_opened":
+        
+        if mega_message_queue:
+            msg = mega_message_queue.pop(0)
+            if msg == "door_opened":
                 door_opened = True
                 break
+                
+        if mega_ser.in_waiting:
+            msg = mega_ser.readline().decode(errors="ignore").strip()
+            if msg == "door_opened":
+                door_opened = True
+                break
+            elif msg:
+                mega_message_queue.append(msg)
+                
         time.sleep(0.1)
 
     if not door_opened:
@@ -1514,6 +1535,8 @@ def customer_cycle():
         weight_live = get_weight_from_sensor()
         
         if weight_live is not None:
+            print(f"⚖️ Live weight while pouring: {weight_live} kg")
+            
             # Emergency Auto-drain logic (Over 10kg)
             if weight_live > 10.0:
                 auto_drain_active = True
@@ -1543,34 +1566,32 @@ def customer_cycle():
                 send_final_data(10.00)
                 auto_drain_active = False
                 
-                mega_ser.reset_input_buffer()
-                time.sleep(0.1)
-                mega_ser.write(b"get_door_state\n")
-                time.sleep(0.2)
-                door_is_closed = None
-
-                for _ in range(10):
-                    if mega_ser.in_waiting:
-                        msg = mega_ser.readline().decode().strip()
-                        if msg == "door_closed":
-                            door_is_closed = True
-                            break
-                        elif msg == "door_opened":
-                            door_is_closed = False
-                            break
-                    wd.kick()
-                    time.sleep(0.1)
-
                 status_enabled = True
                 customer_cycle_running = False
                 alarm_monitor_active = False
                 return
 
+            # Motorized Auto-Close Logic
+            if not motor_close_triggered:
+                if abs(weight_live - last_weight) > 0.05: 
+                    stable_time_start = time.time() 
+                    last_weight = weight_live
+                elif (time.time() - stable_time_start > 15 and weight_live >= MIN_POUR_WEIGHT) or (time.time() - start_time > 120):
+                    print("Pouring finished or timed out. Closing motorized door...")
+                    send_to_arduino("AUTO_DOOR_CLOSE") 
+                    motor_close_triggered = True
+
         # ---------------------------------------------------------
         # LISTEN FOR ARDUINO "DOOR_CLOSED" CONFIRMATION
         # ---------------------------------------------------------
-        if mega_ser.in_waiting:
-            msg = mega_ser.readline().decode().strip()
+        msg = None
+        # Check queue first!
+        if mega_message_queue:
+            msg = mega_message_queue.pop(0)
+        elif mega_ser.in_waiting:
+            msg = mega_ser.readline().decode(errors="ignore").strip()
+
+        if msg:
             if msg == "door_closed" or msg == "doors_locked":
                 if auto_drain_active:
                     send_to_arduino("pump_now")
@@ -1578,8 +1599,11 @@ def customer_cycle():
                 
                 payload = {"qrToken": TOKEN, "machineId" :machine_id, "action" :"Machine door closed." }
                 create_machine_audit(payload)
+                
                 w = get_weight_from_sensor()
                 if w is None or w < 0 : w = 0
+                
+                print(f"📊 Final Estimated Amount: {w} kg")
                 
                 # Check if poured less than minimum
                 if w < MIN_POUR_WEIGHT:
@@ -1607,19 +1631,10 @@ def customer_cycle():
                 print(f"🧪 Turbidity Raw Value: {turbidity_val}")
                 print(f"🧪 Oil Quality: {oil_quality}")
 
-                payload = {
-                    "qrToken": TOKEN,
-                    "machineId": machine_id,
-                    "action": f"Oil quality classified as {oil_quality} (raw={turbidity_val})"
-                }
+                payload = {"qrToken": TOKEN, "machineId": machine_id, "action": f"Oil quality classified as {oil_quality}"}
                 create_machine_audit(payload)
 
-                log_telemetry_to_dashboard(
-                    "Customer Pour Completed",
-                    w,
-                    turbidity_val,
-                    oil_quality
-                )
+                log_telemetry_to_dashboard("Customer Pour Completed", w, turbidity_val, oil_quality)
 
                 # ------------------------------
                 # NORMAL PUMP START
@@ -1628,17 +1643,14 @@ def customer_cycle():
                 send_to_arduino("pump_now")
                 start_pump_safety_timer("normal")
 
+                print("🔄 Monitoring pump weight until empty...")
                 while True:
                     wd.kick()
                     weight = get_weight_from_sensor()
                     if weight is not None:
                         send_to_arduino(f"weight:{weight}")
                         if weight <= 0.2 or pump_timeout_reached:
-                            payload = {
-                                "qrToken": TOKEN,
-                                "machineId": machine_id,
-                                "action": "Weight threshold reached. Machine stopped pumping."
-                            }
+                            payload = {"qrToken": TOKEN, "machineId": machine_id, "action": "Machine stopped pumping."}
                             create_machine_audit(payload)
                             stop_pump_safety_timer()
                             send_to_arduino("LOCK")
