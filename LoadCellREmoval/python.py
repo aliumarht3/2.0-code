@@ -904,23 +904,6 @@ def get_telemetry_from_arduino():
         
     return {"turbidity": 0, "junk_dist": 0.0, "res_dist": 0.0}
 
-def log_telemetry_to_dashboard(action_name, weight, volume, turbidity, junk_level):
-    payload = {
-        "machineId": machine_id,
-        "timestamp": time.time(),
-        "event": action_name,
-        "metrics": {
-            "weightKg": weight,
-            "mainTankVolumeLiters": volume,
-            "turbidityValue": turbidity,
-            "junkTankDistanceCm": junk_level
-        }
-    }
-    try:
-        threading.Thread(target=requests.post, args=(TELEMETRY_URL,), kwargs={'json': payload, 'timeout': 5}, daemon=True).start()
-    except Exception as e:
-        print(f"? Dashboard log thread failed: {e}")
-
 # ------------------------------
 # BACKGROUND: SEND STATUS
 # ------------------------------
@@ -1834,6 +1817,9 @@ def classify_turbidity(raw_value):
     else:
         return "WATER_CONTAMINATED"
 
+# ------------------------------
+# TELEMETRY LOGGING
+# ------------------------------
 
 def log_telemetry_to_dashboard(action_name, weight, turbidity_raw, oil_quality):
     """Send weight + oil quality info to dashboard."""
