@@ -476,7 +476,7 @@ import socket
 # ------------------------------
 # **CRITICAL:** Adjust SMALL_TANK_EMPTY_CM to the EXACT distance (in cm) 
 # your ultrasonic sensor reads when the small tank is completely empty.
-SMALL_TANK_EMPTY_CM = 29.0   
+SMALL_TANK_EMPTY_CM = 23.0   
 SMALL_TANK_FULL_CM = 8.6    # Matches Arduino's SMALL_TANK_THRESHOLD
 MAX_OIL_KG = 10.0            # Max capacity at the FULL_CM mark
 
@@ -1138,24 +1138,20 @@ def get_weight_from_sensor(samples=3):
         wd.kick()
         with mega_lock:
             try:
-                # 1. Safely read pending messages instead of deleting them!
                 while mega_ser.in_waiting:
                     line = mega_ser.readline().decode(errors="ignore").strip()
                     if line:
                         if line.startswith("small_dist:"):
-                            pass # Skip old/stale weight data
+                            pass 
                         else:
-                            mega_message_queue.append(line) # Save door statuses!
+                            mega_message_queue.append(line) 
 
-                # 2. Ask Mega for new distance
                 mega_ser.write(b"get_small_dist\n")
                 mega_ser.flush()
                 
                 start_wait = time.time()
                 dist = None
                 
-                # 3. INCREASED TIMEOUT: The Arduino smoothing math takes ~380ms. 
-                # 1.5 seconds guarantees we don't timeout and miss the data.
                 while time.time() - start_wait < 1.5:
                     if mega_ser.in_waiting:
                         line = mega_ser.readline().decode(errors="ignore").strip()
@@ -1165,7 +1161,6 @@ def get_weight_from_sensor(samples=3):
                             dist = float(line.replace("small_dist:", ""))
                             break
                         else:
-                            # Save asynchronous updates (like door_closed)
                             mega_message_queue.append(line)
                             
                     time.sleep(0.02)
@@ -1193,6 +1188,13 @@ def get_weight_from_sensor(samples=3):
 
     ratio = (SMALL_TANK_EMPTY_CM - avg_dist) / (SMALL_TANK_EMPTY_CM - SMALL_TANK_FULL_CM)
     weight = ratio * MAX_OIL_KG
+    
+    # --- ZERO SNAPPING / DEADBAND ---
+    # Forces the scale to read exactly 0.0 if the estimated weight is tiny
+    # This hides natural ultrasonic jitter when the tank is empty
+    if weight < 0.15:
+        return 0.0
+
     return round(weight, 3)
 
 # ------------------------------
