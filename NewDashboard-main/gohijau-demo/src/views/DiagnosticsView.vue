@@ -13,8 +13,8 @@
             v-model="selectedMachine" 
             class="bg-white border-2 border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-green-500 focus:border-green-500 block w-full p-2 font-medium shadow-sm"
           >
-            <option value="GO-000001">GO-000001</option>
-            <option value="GO-000002">GO-000002 (Live)</option>
+            <option value="GO-000001">GO-000001 (Perlis)</option>
+            <option value="GO-000002">GO-000002</option>
             <option value="GO-000003">GO-000003</option>
           </select>
         </div>
@@ -143,7 +143,7 @@ import * as signalR from '@microsoft/signalr';
 import DashboardLayout from '@/layouts/dashboard_template.vue';
 import Card from '@/components/Card.vue';
 
-const selectedMachine = ref('GO-000002');
+const selectedMachine = ref('GO-000001');
 const isOnlineRunning = ref(false);
 let connection = null;
 
