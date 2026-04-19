@@ -108,10 +108,10 @@ auto_off_timer = None
 try:
     uno_ser = serial.Serial('/dev/ttyACM1', 9600, timeout=1) 
     mega_ser = serial.Serial('/dev/ttyACM0', 9600, timeout=1)
-    print("✓ Serial connected successfully.")
+    print("? Serial connected successfully.")
 except serial.SerialException as e:
-    print(f"⚠️ Serial connection error: {e}")
-    print("⚠️ Falling back to DummySerial for testing...")
+    print(f"?? Serial connection error: {e}")
+    print("?? Falling back to DummySerial for testing...")
     uno_ser = DummySerial()
     mega_ser = DummySerial()
 
@@ -166,7 +166,7 @@ while time.time() - start < 2:
     time.sleep(0.05)
 
 if not tared:
-    print("⚠️ [STARTUP] No TARED reply – continuing anyway.")
+    print("?? [STARTUP] No TARED reply ? continuing anyway.")
 with uno_lock:
     uno_ser.reset_input_buffer()
 
@@ -190,7 +190,7 @@ DIAGNOSTICS_URL = "https://gallows-qualm-dazzler.ngrok-free.dev/api/machine/diag
 
 TOKEN = None
 pin25_on = False  
-machine_id = "GO-000002"
+machine_id = "GO-000001"
 status_enabled = True
 auto_drain_active = False
 
@@ -235,7 +235,7 @@ def update_diagnostic_status(log_no, log_type, component, checking, status, acti
     try:
         requests.post(DIAGNOSTICS_URL, json=payload, headers=headers, timeout=3)
     except Exception as e:
-        print(f"⚠️ Failed to update diagnostic status for {component}: {e}")
+        print(f"?? Failed to update diagnostic status for {component}: {e}")
 
 def publish_manual_test_status(test_name, status):
     mapping = {
@@ -246,7 +246,7 @@ def publish_manual_test_status(test_name, status):
         "valve": "Valve"
     }
     comp_name = mapping.get(test_name, test_name)
-    ui_status = "✓" if status == "DONE" else ("IN_PROGRESS" if status == "RUNNING" else "X")
+    ui_status = "?" if status == "DONE" else ("IN_PROGRESS" if status == "RUNNING" else "X")
     
     update_diagnostic_status(0, "Physical", comp_name, f"Manual Test: {status}", ui_status)
 
@@ -278,13 +278,13 @@ def get_turbidity_from_arduino():
             time.sleep(0.1)
 
     except Exception as e:
-        print(f"⚠️ Turbidity read error: {e}")
+        print(f"?? Turbidity read error: {e}")
 
     return None
 
 
 def run_online_diagnostics(tared_status=True):
-    print("\n--- 🔍 STARTED ONLINE DIAGNOSTICS ---")
+    print("\n--- ? STARTED ONLINE DIAGNOSTICS ---")
     
     tests = [
         {"no": 1, "comp": "Has WiFi?", "chk": "Connecting to 8.8.8.8:53"},
@@ -303,7 +303,7 @@ def run_online_diagnostics(tared_status=True):
     try:
         socket.setdefaulttimeout(3)
         socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("8.8.8.8", 53))
-        update_diagnostic_status(1, "Online", "Has WiFi?", "Connected", "✓")
+        update_diagnostic_status(1, "Online", "Has WiFi?", "Connected", "?")
     except Exception as e:
         update_diagnostic_status(1, "Online", "Has WiFi?", f"Error: {e}", "X")
 
@@ -313,7 +313,7 @@ def run_online_diagnostics(tared_status=True):
     try:
         us_small = send_to_arduino("CHECK_ULTRASONIC_SMALL")
         # --- FIXED: Treat "NO_READING" (0 cm) as a successful connection, just an empty tank ---
-        status_us_small = "✓" if us_small and ("OK" in str(us_small) or "NO_READING" in str(us_small)) else "X"
+        status_us_small = "?" if us_small and ("OK" in str(us_small) or "NO_READING" in str(us_small)) else "X"
         update_diagnostic_status(2, "Online", "Weighing Tank (Ultrasonic)", "Object depth / Ultrasonic reading", status_us_small, f"US Reading: {us_small}" if status_us_small=="X" else "")
     except Exception as e:
         update_diagnostic_status(2, "Online", "Weighing Tank (Ultrasonic)", f"Error: {e}", "X")
@@ -322,7 +322,7 @@ def run_online_diagnostics(tared_status=True):
 
     # 3. Load Cell
     try:
-        status_lc = "✓" if tared_status else "X"
+        status_lc = "?" if tared_status else "X"
         update_diagnostic_status(3, "Online", "Weighing Tank (Load Cell)", "Weight / Load cell reading", status_lc)
     except Exception as e:
         update_diagnostic_status(3, "Online", "Weighing Tank (Load Cell)", f"Error: {e}", "X")
@@ -333,7 +333,7 @@ def run_online_diagnostics(tared_status=True):
     try:
         us_res = send_to_arduino("CHECK_ULTRASONIC_RES")
         # --- FIXED: Treat "NO_READING" (0 cm) as a successful connection ---
-        status_us_res = "✓" if us_res and ("OK" in str(us_res) or "NO_READING" in str(us_res)) else "X"
+        status_us_res = "?" if us_res and ("OK" in str(us_res) or "NO_READING" in str(us_res)) else "X"
         update_diagnostic_status(4, "Online", "Barrel", "Storage level / Ultrasonic reading", status_us_res, f"Barrel Reading: {us_res}" if status_us_res=="X" else "")
     except Exception as e:
         update_diagnostic_status(4, "Online", "Barrel", f"Error: {e}", "X")
@@ -377,7 +377,7 @@ def run_online_diagnostics(tared_status=True):
                 "Online",
                 "Filter #1",
                 "Flow & Turbidity status",
-                "☑",
+                "?",
                 f"Turbidity Raw Reading: {turbidity_val}"
             )
 
@@ -396,9 +396,9 @@ def run_online_diagnostics(tared_status=True):
     # 6. Door Sensors
     try:
         door_top = send_to_arduino("get_door_state")
-        door_2 = send_to_arduino("CHECK_DOOR_GPIO2")
+        door_2 = send_to_arduino("CHECK_DOOR_GPIO3")
         doors_ok = ("door_closed" in str(door_top)) and ("CLOSED" in str(door_2))
-        update_diagnostic_status(6, "Online", "Door Sensors", "Relay input / Security status", "✓" if doors_ok else "X", "Check doors" if not doors_ok else "")
+        update_diagnostic_status(6, "Online", "Door Sensors", "Relay input / Security status", "?" if doors_ok else "X", "Check doors" if not doors_ok else "")
     except Exception as e:
         update_diagnostic_status(6, "Online", "Door Sensors", f"Error: {e}", "X")
 
@@ -407,10 +407,10 @@ def run_online_diagnostics(tared_status=True):
 def run_physical_diagnostics(component_name):
     global manual_test_running, machine_mode 
     
-    print(f"\n--- 🛠 MANUAL TEST TRIGGERED: {component_name} ---")
+    print(f"\n--- ? MANUAL TEST TRIGGERED: {component_name} ---")
     
     if machine_mode != "IDLE" or getattr(globals(), 'customer_cycle_running', False):
-        print(f"⚠️ Machine is BUSY. Cannot safely test {component_name}.")
+        print(f"?? Machine is BUSY. Cannot safely test {component_name}.")
         return
 
     manual_test_running = True
@@ -450,10 +450,10 @@ def run_physical_diagnostics(component_name):
         else:
             time.sleep(2)
             
-        print(f"✓ Physical action for {component_name} finished. Awaiting manual UI check.")
+        print(f"? Physical action for {component_name} finished. Awaiting manual UI check.")
 
     except Exception as e:
-        print(f"⚠️ Error testing {component_name}: {e}")
+        print(f"?? Error testing {component_name}: {e}")
         
     finally:
         manual_test_running = False
@@ -493,7 +493,7 @@ def get_telemetry_from_arduino():
                         }
             time.sleep(0.1)
     except Exception as e:
-        print(f"⚠️ Telemetry parse error: {e}")
+        print(f"?? Telemetry parse error: {e}")
         
     return {"turbidity": 0, "junk_dist": 0.0, "res_dist": 0.0}
 
@@ -512,7 +512,7 @@ def log_telemetry_to_dashboard(action_name, weight, volume, turbidity, junk_leve
     try:
         threading.Thread(target=requests.post, args=(TELEMETRY_URL,), kwargs={'json': payload, 'timeout': 5}, daemon=True).start()
     except Exception as e:
-        print(f"⚠️ Dashboard log thread failed: {e}")
+        print(f"?? Dashboard log thread failed: {e}")
 
 # ------------------------------
 # BACKGROUND: SEND STATUS
@@ -522,9 +522,9 @@ def send_status_loop():
     while True:
         try:
             if status_enabled:
-                hub_connection.send("SendStatus", ["GO-000001", "Active"])
+                hub_connection.send("SendStatus", ["GO-000002", "Active"])
         except Exception as e:
-            print(f"[CLIENT] ⚠️ Failed to send status: {e}")
+            print(f"[CLIENT] ?? Failed to send status: {e}")
         time.sleep(5)
 
 # ------------------------------
@@ -545,7 +545,7 @@ hub_connection = (
 )
 
 def on_open():
-    print("[CLIENT] ✓ Connected to server")
+    print("[CLIENT] ? Connected to server")
     send_to_arduino("PYTHON_READY")
     time.sleep(0.5)
     send_to_arduino("LED_GREEN_ON")
@@ -553,17 +553,18 @@ def on_open():
 def reconnect_forever():
     while True:
         try:
-            print("[CLIENT] 🔄 Reconnecting to SignalR...")
+            print("[CLIENT] ? Reconnecting to SignalR...")
             hub_connection.start()
-            print("[CLIENT] ✓ Reconnected to SignalR")
+            print("[CLIENT] ? Reconnected to SignalR")
             return
         except Exception as e:
-            print(f"[CLIENT] ⚠️ Reconnect failed: {e}")
+            print(f"[CLIENT] ?? Reconnect failed: {e}")
             time.sleep(5)
             
 def on_close():
-    print("[CLIENT] ❌ Disconnected from server")
-    #reconnect_forever()
+    print("[CLIENT] ? Disconnected from server. Reconnecting in background...")
+    # Safely start the reconnect loop in a background thread so it doesn't freeze the machine!
+    threading.Thread(target=reconnect_forever, daemon=True).start()
     
 def on_collector_end():
     print("[SERVER] CollectorEnd received. Stopping machine...")
@@ -574,10 +575,10 @@ def on_collector_end():
         payload = {"token": TOKEN, "machineId":machine_id}
         requests.post(FINAL_COLLECTOR_SUBMIT_URL , json=payload, timeout=5)
     except Exception as e:
-        print(f"⚠️ Failed to send Collection final data: {e}")
+        print(f"?? Failed to send Collection final data: {e}")
 
 def on_receive_command(command):
-    print(f"[COMMAND] Server says 👉 {command}")
+    print(f"[COMMAND] Server says ? {command}")
 
     cmd = command[0] if isinstance(command, list) and command else command
 
@@ -662,7 +663,7 @@ def on_run_physical(args):
         threading.Thread(target=run_physical_diagnostics, args=(args[1],), daemon=True).start()
 
 def on_signalr_error(message):
-    print(f"[CLIENT] ⚠️ SignalR Error: {message}")
+    print(f"[CLIENT] ?? SignalR Error: {message}")
     
 hub_connection.on("ReceiveCommand", on_receive_command)  
 hub_connection.on("RunOnlineDiagnostics", on_run_online)
@@ -673,13 +674,13 @@ hub_connection.on_close(on_close)
 hub_connection.on_error(on_signalr_error)
 
 try:
-    print("[CLIENT] 🔄 Attempting to connect to SignalR...")
+    print("[CLIENT] ? Attempting to connect to SignalR...")
     hub_connection.start()
 except Exception as e:
-    print(f"[CLIENT] ⚠️ Initial connection failed: {e}")
+    print(f"[CLIENT] ?? Initial connection failed: {e}")
     threading.Thread(target=reconnect_forever, daemon=True).start()
 
-print("[CLIENT] ✓ Starting status thread...")
+print("[CLIENT] ? Starting status thread...")
 threading.Thread(target=send_status_loop, daemon=True).start()
 
 # ------------------------------
@@ -701,10 +702,10 @@ def internet_monitor_loop():
                 internet_available = state
             if state != last_sent_internet_state:
                 if state:
-                    print("[INTERNET] ✓ Internet is back")
+                    print("[INTERNET] ? Internet is back")
                     send_to_arduino("HAS_INTERNET")
                 else:
-                    print("[INTERNET] ⚠️ No internet")
+                    print("[INTERNET] ?? No internet")
                     send_to_arduino("NO_INTERNET")
                 last_sent_internet_state = state
         except Exception as e:
@@ -721,7 +722,7 @@ def get_weight_from_uno(samples=10):
     with uno_lock:
         uno_ser.reset_input_buffer()
         
-    print("⏳ Waiting for UNO to stabilize...")
+    print("? Waiting for UNO to stabilize...")
     time.sleep(1.5)
 
     weights = []
@@ -731,7 +732,7 @@ def get_weight_from_uno(samples=10):
             with uno_lock:
                 raw = uno_ser.readline()
             if not raw:
-                print("⚠️ UNO returned no data")
+                print("?? UNO returned no data")
                 continue
             line = raw.decode(errors='ignore').strip()
             if not line:
@@ -742,7 +743,7 @@ def get_weight_from_uno(samples=10):
                 continue
             weights.append(weight)
         except Exception as e:
-            print(f"⚠️ Bad data: {e}")
+            print(f"?? Bad data: {e}")
         time.sleep(0.15)
 
     if not weights:
@@ -766,11 +767,11 @@ def create_machine_overflow(payload):
     headers = {'Content-Type': 'application/json'}
     try:
         response = requests.post(OVERFLOW_URL, json=payload, headers=headers, timeout=5)
-        print(f"✓ API Response: {response.status_code} - {response.text}")
+        print(f"? API Response: {response.status_code} - {response.text}")
         if response.status_code == 200:
             return True
     except Exception as e:
-        print(f"⚠️ API Error: {e}")
+        print(f"?? API Error: {e}")
     return False
 
 # ------------------------------
@@ -787,7 +788,7 @@ def wiper_monitor_loop():
         while machine_mode != "IDLE" or manual_test_running or getattr(globals(), 'customer_cycle_running', False):
             time.sleep(5)
 
-        print("\n--- 🧹 SCHEDULED WIPER CYCLE STARTED ---")
+        print("\n--- ? SCHEDULED WIPER CYCLE STARTED ---")
         wiper_running = True
         machine_mode = "BUSY"
 
@@ -799,7 +800,7 @@ def wiper_monitor_loop():
             # The placeholder command for the Arduino Mega
             send_to_arduino("START_WIPER_ROUTINE")
 
-            print("⏳ Wiper is running for 75 seconds...")
+            print("? Wiper is running for 75 seconds...")
             
             # Break the 75-second wait into chunks to kick the watchdog.
             # If we just do time.sleep(75), we risk the 120s watchdog timing out 
@@ -808,10 +809,10 @@ def wiper_monitor_loop():
                 wd.kick()
                 time.sleep(5)
 
-            print("✓ Wiper cycle complete.")
+            print("? Wiper cycle complete.")
             
         except Exception as e:
-            print(f"⚠️ Wiper cycle error: {e}")
+            print(f"?? Wiper cycle error: {e}")
             
         finally:
             # Release the machine back to normal operation
@@ -822,7 +823,7 @@ def wiper_monitor_loop():
 # QR HANDLING
 # ------------------------------
 def wait_for_qr():
-    print("⏳ Waiting for QR scan...")
+    print("? Waiting for QR scan...")
     
     if sys.platform == 'win32':
         import msvcrt
@@ -875,14 +876,14 @@ def send_qr_to_api(qr_token):
                     panel_type = success_val.upper()
 
             if panel_type:
-                print(f"✓ QR Validated. Panel: {panel_type}")
+                print(f"? QR Validated. Panel: {panel_type}")
                 return panel_type
             else:
-                print(f"⚠️ QR Validated but panel type missing in response: {data}")
+                print(f"?? QR Validated but panel type missing in response: {data}")
         else:
-            print(f"⚠️ QR Validation failed: {response.status_code} - {response.text}")
+            print(f"?? QR Validation failed: {response.status_code} - {response.text}")
     except Exception as e:
-        print(f"⚠️ API Error during QR validation: {e}")
+        print(f"?? API Error during QR validation: {e}")
     return None
 
 # ------------------------------
@@ -892,9 +893,9 @@ def send_final_data(oil_amount):
     payload = {"token": TOKEN, "oilAmount": round(oil_amount, 2), "machineId":machine_id}
     try:
         r = requests.post(FINAL_SUBMIT_URL, json=payload, timeout=5)
-        print(f"✓ Final Data Sent: {r.status_code} - {r.text}")
+        print(f"? Final Data Sent: {r.status_code} - {r.text}")
     except Exception as e:
-        print(f"⚠️ Failed to send final data: {e}")
+        print(f"?? Failed to send final data: {e}")
 
 # ------------------------------
 # PUMP
@@ -906,7 +907,7 @@ def monitor_and_stop_pump():
             send_to_arduino(f"weight:{weight}")
             if weight <= 0.2 or pump_timeout_reached:
                 if pump_timeout_reached:
-                    print("⚠️ Pump timeout – treating as weight <= 0.2 kg.")
+                    print("?? Pump timeout ? treating as weight <= 0.2 kg.")
                 stop_pump_safety_timer()
                 send_to_arduino("LOCK")
                 break
@@ -922,7 +923,7 @@ def create_machine_audit(payload):
         if response.status_code == 200:
             return True
     except Exception as e:
-        print(f"⚠️ API Error: {e}")
+        print(f"?? API Error: {e}")
     return False
 
 # ------------------------------
@@ -941,7 +942,7 @@ def start_pump_safety_timer(mode: str):
         def timeout():
             global pump_timeout_reached, pump_mode
             pump_timeout_reached = True
-            print(f"⚠️ [PUMP TIMER] {PUMP_TIMEOUT_SEC}s exceeded.")
+            print(f"?? [PUMP TIMER] {PUMP_TIMEOUT_SEC}s exceeded.")
             try:
                 if pump_mode == "normal":
                     send_to_arduino("LOCK")
@@ -972,7 +973,7 @@ def run_global_auto_drain():
     global pump_timeout_reached, global_auto_drain_active
     if global_auto_drain_active: return
 
-    print("⚠️ [GLOBAL AUTO-DRAIN] Starting due to weight > 10kg")
+    print("?? [GLOBAL AUTO-DRAIN] Starting due to weight > 10kg")
     global_auto_drain_active = True
 
     try:
@@ -996,7 +997,7 @@ def run_global_auto_drain():
             time.sleep(1)
 
     except Exception as e:
-        print(f"⚠️ [GLOBAL AUTO-DRAIN] Exception: {e}")
+        print(f"?? [GLOBAL AUTO-DRAIN] Exception: {e}")
 
     finally:
         global_auto_drain_active = False
@@ -1218,7 +1219,7 @@ def customer_cycle():
                 
                 # Check if poured less than minimum
                 if w < MIN_POUR_WEIGHT:
-                    payload = {"qrToken": TOKEN, "machineId": machine_id, "action": f"No oil poured ({w} kg) – Pump skipped"}
+                    payload = {"qrToken": TOKEN, "machineId": machine_id, "action": f"No oil poured ({w} kg) ? Pump skipped"}
                     create_machine_audit(payload)
                     send_final_data(0.0)
                     send_to_arduino("LOCK") # Global reset
@@ -1229,7 +1230,7 @@ def customer_cycle():
                 # ------------------------------
                 # NORMAL PUMP START WITH TURBIDITY CHECK
                 # ------------------------------
-                print("⏳ Checking oil quality (Turbidity) and gathering telemetry...")
+                print("? Checking oil quality (Turbidity) and gathering telemetry...")
                 telemetry = get_telemetry_from_arduino()
                 turbidity_val = telemetry.get('turbidity', 0)
                 volume_liters = calculate_ibc_volume(telemetry.get('res_dist', 0))
@@ -1301,7 +1302,7 @@ def collector_cycle():
 
     else:
         send_to_arduino("PIN25_OFF")
-        payload = {"qrToken": TOKEN, "machineId": machine_id, "action": "Collector verified – solenoid valve deactivated"}
+        payload = {"qrToken": TOKEN, "machineId": machine_id, "action": "Collector verified ? solenoid valve deactivated"}
         create_machine_audit(payload)
         pin25_on = False
         try: auto_off_timer.cancel()
@@ -1340,8 +1341,7 @@ def main():
     threading.Thread(target=global_auto_drain_monitor, daemon=True).start()
     threading.Thread(target=wiper_monitor_loop, daemon=True).start()
 
-    # Pushed to a background thread so 404 timeouts don't block the startup
-    threading.Thread(target=run_online_diagnostics, args=(tared,), daemon=True).start()
+    run_online_diagnostics(tared)
 
     while True:
         wd.kick()
@@ -1406,7 +1406,7 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n🛑 Program stopped by user.")
+        print("\n? Program stopped by user.")
         try:
             mega_ser.close()
             uno_ser.close()
