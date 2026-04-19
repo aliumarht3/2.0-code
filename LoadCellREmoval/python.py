@@ -157,7 +157,7 @@ DIAGNOSTICS_URL = "https://gallows-qualm-dazzler.ngrok-free.dev/api/machine/diag
 
 TOKEN = None
 pin25_on = False  
-machine_id = "GO-000002"
+machine_id = "GO-000001"
 status_enabled = True
 auto_drain_active = False
 
@@ -1462,14 +1462,11 @@ def customer_cycle():
     global alarm_monitor_active, door_monitor_thread
     customer_cycle_running = True
     
-    print("? Starting customer cycle...")
+    print("🔄 Starting customer cycle...")
     start_time = time.time()
 
-    # ---------------------------------------------------------
-    # 1. OPEN THE MOTORIZED DOOR
-    # ---------------------------------------------------------
-    send_to_arduino("AUTO_DOOR_OPEN")
-    payload = {"qrToken": TOKEN, "machineId" :machine_id, "action" :"Customer verified - Motorized door opening" }
+    send_to_arduino("unlock")
+    payload = {"qrToken": TOKEN, "machineId" :machine_id, "action" :"Customer verified - Top door unlock" }
     create_machine_audit(payload)
     
     door_opened = False
@@ -1485,13 +1482,13 @@ def customer_cycle():
     if not door_opened:
         payload = {"qrToken": TOKEN, "machineId" :machine_id, "action" :"Top door not opened - lock engaged." }
         create_machine_audit(payload)
-        send_to_arduino("AUTO_DOOR_CLOSE")
+        send_to_arduino("LOCK")
         send_final_data(0.0)
         customer_cycle_running = False
         return
 
     # ---------------------------------------------------------
-    # 2. POURING PHASE & INACTIVITY TIMER
+    # POURING PHASE & INACTIVITY TIMER
     # ---------------------------------------------------------
     last_weight = 0.0
     stable_time_start = time.time()
@@ -1508,8 +1505,8 @@ def customer_cycle():
                 payload = {"qrToken": TOKEN, "machineId": machine_id, "action": f"Auto-drain triggered at {weight_live}kg"}
                 create_machine_audit(payload)
 
-                send_to_arduino("AUTO_DOOR_CLOSE")
-                time.sleep(3.0) 
+                send_to_arduino("LOCK")
+                time.sleep(0.30)
                 send_to_arduino("pump_now")
                 time.sleep(0.10)
                 send_to_arduino("excess_pump_start")
@@ -1554,18 +1551,8 @@ def customer_cycle():
                 alarm_monitor_active = False
                 return
 
-            # Motorized Auto-Close Logic
-            if not motor_close_triggered:
-                if abs(weight_live - last_weight) > 0.05: 
-                    stable_time_start = time.time() 
-                    last_weight = weight_live
-                elif (time.time() - stable_time_start > 15 and weight_live >= MIN_POUR_WEIGHT) or (time.time() - start_time > 120):
-                    print("Pouring finished or timed out. Closing motorized door...")
-                    send_to_arduino("AUTO_DOOR_CLOSE") 
-                    motor_close_triggered = True
-
         # ---------------------------------------------------------
-        # 3. LISTEN FOR ARDUINO "DOOR_CLOSED" CONFIRMATION
+        # LISTEN FOR ARDUINO "DOOR_CLOSED" CONFIRMATION
         # ---------------------------------------------------------
         if mega_ser.in_waiting:
             msg = mega_ser.readline().decode().strip()
@@ -1577,29 +1564,47 @@ def customer_cycle():
                 payload = {"qrToken": TOKEN, "machineId" :machine_id, "action" :"Machine door closed." }
                 create_machine_audit(payload)
                 w = get_weight_from_sensor()
-                if w < 0 : w = 0
+                if w is None or w < 0 : w = 0
                 
                 # Check if poured less than minimum
                 if w < MIN_POUR_WEIGHT:
-                    payload = {"qrToken": TOKEN, "machineId": machine_id, "action": f"No oil poured ({w} kg) - Pump skipped"}
+                    payload = {"qrToken": TOKEN, "machineId": machine_id, "action": f"No oil poured ({w} kg) — Pump skipped"}
                     create_machine_audit(payload)
                     send_final_data(0.0)
-                    send_to_arduino("LOCK") 
+                    send_to_arduino("LOCK")
                     customer_cycle_running = False
                     alarm_monitor_active = False
                     return
 
+                #------------------------------
+                # TURBIDITY CHECK + QUALITY LOG
                 # ------------------------------
-                # NORMAL PUMP START WITH TURBIDITY CHECK
-                # ------------------------------
-                print("? Checking oil quality (Turbidity) and gathering telemetry...")
-                telemetry = get_telemetry_from_arduino()
-                turbidity_val = telemetry.get('turbidity', 0)
-                volume_liters = calculate_ibc_volume(telemetry.get('res_dist', 0))
-                junk_dist = telemetry.get('junk_dist', 0)
+                print("🔍 Checking oil quality (Turbidity)...")
+                turbidity_val = get_turbidity_from_arduino()
 
-                log_telemetry_to_dashboard("Customer Pour Completed", w, volume_liters, turbidity_val, junk_dist)
+                if turbidity_val is None:
+                    print("⚠️ No turbidity reading received. Marking as UNKNOWN.")
+                    turbidity_val = -1
+                    oil_quality = "UNKNOWN"
+                else:
+                    oil_quality = classify_turbidity(turbidity_val)
 
+                print(f"🧪 Turbidity Raw Value: {turbidity_val}")
+                print(f"🧪 Oil Quality: {oil_quality}")
+
+                payload = {
+                    "qrToken": TOKEN,
+                    "machineId": machine_id,
+                    "action": f"Oil quality classified as {oil_quality} (raw={turbidity_val})"
+                }
+                create_machine_audit(payload)
+
+                log_telemetry_to_dashboard(
+                    "Customer Pour Completed",
+                    w,
+                    turbidity_val,
+                    oil_quality
+                )
 
                 # ------------------------------
                 # NORMAL PUMP START
@@ -1614,7 +1619,11 @@ def customer_cycle():
                     if weight is not None:
                         send_to_arduino(f"weight:{weight}")
                         if weight <= 0.2 or pump_timeout_reached:
-                            payload = {"qrToken": TOKEN, "machineId" :machine_id, "action" :" Weight threshold reached . Machine-stoped pumping." }
+                            payload = {
+                                "qrToken": TOKEN,
+                                "machineId": machine_id,
+                                "action": "Weight threshold reached. Machine stopped pumping."
+                            }
                             create_machine_audit(payload)
                             stop_pump_safety_timer()
                             send_to_arduino("LOCK")
@@ -1627,7 +1636,7 @@ def customer_cycle():
                 create_machine_overflow(overflow_payload)
                 payload = {"qrToken": TOKEN, "machineId" :machine_id, "action" :f"Overflow Detected :{msg}" }
                 create_machine_audit(payload)
-                send_to_arduino("DOOR_MOTOR_CLOSE")
+                send_to_arduino("LOCK")
                 monitor_and_stop_pump()
                 break
         time.sleep(0.2)
