@@ -375,8 +375,8 @@ def get_weight_from_sensor(samples=3):
     global weight_read_in_progress
     weight_read_in_progress = True
     wd.kick()
+
     distances = []
-    
     for _ in range(samples):
         wd.kick()
         with mega_lock:
@@ -403,18 +403,27 @@ def get_weight_from_sensor(samples=3):
                             mega_message_queue.append(line)
                     time.sleep(0.02)
                 
-                if dist is not None and dist > 0: distances.append(dist)
-            except Exception as e: print(f"❌ Error reading weight: {e}")
+                if dist is not None and dist > 0: 
+                    distances.append(dist)
+                    print(f"📏 Ultrasonic Raw Depth: {dist} cm") # VISUAL FEEDBACK ADDED
+            except Exception as e: 
+                print(f"❌ Error reading weight: {e}")
         time.sleep(0.1)
 
     weight_read_in_progress = False
-    if not distances: return 0.0
+
+    if not distances: 
+        print("⚠️ No valid echoes received from Ultrasonic.")
+        return 0.0
 
     distances.sort()
     median = distances[len(distances) // 2]
     filtered = [d for d in distances if abs(d - median) <= 3.0]
-    if not filtered: filtered = distances
+    if not filtered: 
+        filtered = distances
     avg_dist = sum(filtered) / len(filtered)
+
+    print(f"📦 Filtered Depths: {filtered} cm -> Avg: {round(avg_dist,2)} cm") # VISUAL FEEDBACK ADDED
 
     if avg_dist >= SMALL_TANK_EMPTY_CM: return 0.0
     if avg_dist <= SMALL_TANK_FULL_CM: return MAX_OIL_KG
@@ -588,11 +597,13 @@ def customer_cycle():
         weight_live = get_weight_from_sensor()
         
         if weight_live is not None:
+            # ---> ADD THIS LINE BACK IN <---
+            print(f"⚖️ Live weight while pouring: {weight_live} kg")
+            
             if weight_live > 10.0:
                 auto_drain_active = True
                 create_machine_audit({"qrToken": TOKEN, "machineId": machine_id, "action": f"Auto-drain triggered at {weight_live}kg"})
                 send_to_arduino("LOCK"); time.sleep(0.30); send_to_arduino("pump_now"); time.sleep(0.10); send_to_arduino("excess_pump_start")
-                start_pump_safety_timer("excess")
 
                 while True:
                     wd.kick()
