@@ -905,6 +905,31 @@ def get_telemetry_from_arduino():
     return {"turbidity": 0, "junk_dist": 0.0, "res_dist": 0.0}
 
 # ------------------------------
+# TELEMETRY LOGGING
+# ------------------------------
+def log_telemetry_to_dashboard(action_name, weight, turbidity_raw, oil_quality):
+    """Send weight + oil quality info to dashboard."""
+    payload = {
+        "machineId": machine_id,
+        "timestamp": time.time(),
+        "event": action_name,
+        "metrics": {
+            "weightKg": weight,
+            "turbidityRaw": turbidity_raw,
+            "oilQuality": oil_quality
+        }
+    }
+    try:
+        threading.Thread(
+            target=requests.post,
+            args=(TELEMETRY_URL,),
+            kwargs={"json": payload, "timeout": 5},
+            daemon=True
+        ).start()
+    except Exception as e:
+        print(f"⚠️ Dashboard log thread failed: {e}")
+
+# ------------------------------
 # BACKGROUND: SEND STATUS
 # ------------------------------
 def send_status_loop():
@@ -2787,9 +2812,6 @@ def main():
         finally:
             # Ensure the machine is always marked as IDLE when a cycle finishes or fails
             machine_mode = "IDLE"
-
-if __name__ == "__main__":
-    main()
 
 # ------------------------------
 # Entry Point
