@@ -405,7 +405,7 @@ def get_weight_from_sensor(samples=3):
                 
                 if dist is not None and dist > 0: 
                     distances.append(dist)
-                    print(f"📏 Ultrasonic Raw Depth: {dist} cm") # VISUAL FEEDBACK ADDED
+                    #print(f"📏 Ultrasonic Raw Depth: {dist} cm") # VISUAL FEEDBACK ADDED
             except Exception as e: 
                 print(f"❌ Error reading weight: {e}")
         time.sleep(0.1)
