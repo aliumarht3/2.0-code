@@ -1260,32 +1260,45 @@ def wait_for_qr():
 # SEND QR TO API
 # ------------------------------
 def send_qr_to_api(qr_token):
+    global TOKEN
+    headers = {'Content-Type': 'application/json'}
+    
+    # 1. Define the full payload including the machineId
+    payload = {
+        "token": qr_token, 
+        "machineId": machine_id
+    }
+    
     try:
-        payload = {
-            "token": qr_token,
-            "machineId": machine_id
-        }
+        print(f"📨 Sending token: {payload}")
+        wd.kick()
         
-        response = requests.post(QR_VALIDATE_URL, json={"token": qr_token}, timeout=5)
+        # 2. Pass 'payload' and 'headers' into the post request
+        response = requests.post(QR_VALIDATE_URL, json=payload, headers=headers, timeout=5)
+        print(f"🔁 API Response: {response.status_code} - {response.text}")
+        
         if response.status_code == 200:
             data = response.json()
+            success = data.get("success")
             
-            panel_type = data.get("panelType") or data.get("role") or data.get("panel")
-            
-            if not panel_type:
-                success_val = data.get("success")
-                if isinstance(success_val, str) and "PANEL" in success_val.upper():
-                    panel_type = success_val.upper()
-
-            if panel_type:
-                print(f"? QR Validated. Panel: {panel_type}")
-                return panel_type
-            else:
-                print(f"? QR Validated but panel type missing in response: {data}")
+            # 3. Robust parsing exactly as it was in LEVEL47.py
+            if isinstance(success, str) and "PANEL" in success.upper():
+                TOKEN = qr_token
+                return success.upper()
+            elif success is True or success is None:
+                TOKEN = qr_token
+                return (
+                    data.get("panelType")
+                    or data.get("role")
+                    or data.get("panel")
+                    or data.get("paneltype")
+                )
         else:
-            print(f"? QR Validation failed: {response.status_code} - {response.text}")
+            print(f"❌ QR Validation failed: {response.status_code} - {response.text}")
+            
     except Exception as e:
-        print(f"? API Error during QR validation: {e}")
+        print(f"❌ API Error during QR validation: {e}")
+        
     return None
 
 # ------------------------------
