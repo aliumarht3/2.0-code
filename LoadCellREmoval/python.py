@@ -199,7 +199,7 @@ def run_online_diagnostics(tared_status=True):
     tests = [
         {"no": 1, "comp": "Has WiFi?", "chk": "Connecting to 8.8.8.8:53"},
         {"no": 2, "comp": "Weighing Tank (Ultrasonic)", "chk": "Object depth / Ultrasonic reading"},
-        {"no": 3, "comp": "Weighing Tank (Estimated Weight)", "chk": "Weight / Ultrasonic conversion"},
+        {"no": 3, "comp": "Weighing Tank (Load Cell)", "chk": "Weight / Ultrasonic conversion"}, # <--- CHANGED BACK
         {"no": 4, "comp": "Barrel", "chk": "Storage level / Ultrasonic reading"},
         {"no": 5, "comp": "Filter #1", "chk": "Flow & Turbidity status"},
         {"no": 6, "comp": "Door Sensors", "chk": "Relay input / Security status"}
@@ -228,9 +228,9 @@ def run_online_diagnostics(tared_status=True):
     try:
         test_weight = get_weight_from_sensor(samples=2)
         status_lc = "☑" if test_weight is not None else "X"
-        update_diagnostic_status(3, "Online", "Weighing Tank (Estimated Weight)", "Weight / Ultrasonic conversion", status_lc)
+        update_diagnostic_status(3, "Online", "Weighing Tank (Load Cell)", "Weight / Ultrasonic conversion", status_lc)
     except Exception as e:
-        update_diagnostic_status(3, "Online", "Weighing Tank (Estimated Weight)", f"Error: {e}", "X")
+        update_diagnostic_status(3, "Online", "Weighing Tank (Load Cell)", f"Error: {e}", "X")
 
     time.sleep(0.5)
 
