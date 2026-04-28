@@ -259,15 +259,17 @@ void loop() {
     }
     else if (command == "get_turbidity") {
       int turbidityRaw = readTurbidityRaw();
+      Serial.print("turbidity:");
+      Serial.println(turbidityRaw);
+    }
+    else if (command == "get_us_dist") {
+      float dist = ultrasonicSmall.ping_cm();
+      Serial.print("us_dist:");
+      Serial.println(dist);
+    }
 
-       Serial.print("turbidity:");
-       Serial.println(turbidityRaw);
-
-    continue;
-}
-
-    // â Python LED control commands
-    if (command == "LED_GREEN_ON") {
+    // ✅ Python LED control commands
+    else if (command == "LED_GREEN_ON") {
       digitalWrite(RED_LED, HIGH);
       digitalWrite(GREEN_LED, LOW);
       Serial.println("LED_GREEN_ON_ACK");
