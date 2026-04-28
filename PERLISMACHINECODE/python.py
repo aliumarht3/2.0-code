@@ -293,9 +293,9 @@ def run_online_diagnostics():
         door_top = send_to_arduino("get_door_state")
         door_2 = send_to_arduino("CHECK_DOOR_GPIO3")
         doors_ok = ("door_closed" in str(door_top)) and ("CLOSED" in str(door_2))
-        update_diagnostic_status(6, "Online", "Door Sensors", "Relay input / Security status", "✅" if doors_ok else "❌", "Check doors" if not doors_ok else "")
+        update_diagnostic_status(6, "Online", "Door Sensors", "Relay input / Security status", "✅" if doors_ok else "FAIL", "Check doors" if not doors_ok else "")
     except Exception as e:
-        update_diagnostic_status(6, "Online", "Door Sensors", f"Error: {e}", "❌")
+        update_diagnostic_status(6, "Online", "Door Sensors", f"Error: {e}", "FAIL")
     print("--- ONLINE DIAGNOSTICS COMPLETE ---\n")
 
 def run_physical_diagnostics(component_name):
@@ -600,22 +600,29 @@ def customer_cycle():
                 create_machine_audit({"qrToken": TOKEN, "machineId": machine_id, "action": f"Auto-drain triggered at {weight_live}kg"})
                 send_to_arduino("LOCK")
                 time.sleep(0.30)
+                send_final_data(w)
                 send_to_arduino("excess_pump_start")
+                start_pump_safety_timer("normal")
 
                 while True:
                     wd.kick()
-                    wdrain = get_weight_from_sensor()
-                    if wdrain is not None:
-                        send_to_arduino(f"weight:{wdrain}")
-                        if wdrain <= 0.25:
-                            send_to_arduino("excess_pump_stop"); stop_pump_safety_timer()
-                            create_machine_audit({"qrToken": TOKEN, "machineId": machine_id, "action": "Auto-drain complete"})
+                    weight = get_weight_from_sensor()
+                    if weight is not None:
+                        # Send to mega just in case they update the arduino software in the future
+                        send_to_arduino(f"weight:{weight}")
+                        if weight <= 0.2 or pump_timeout_reached:
+                            create_machine_audit({"qrToken": TOKEN, "machineId": machine_id, "action": "Machine stopped pumping."})
+                            send_to_arduino("excess_pump_stop")
+                            stop_pump_safety_timer()
+                            send_to_arduino("LOCK")
+                            
+                            # NEW: Tell the Mega the machine is ready for the next user
+                            time.sleep(0.5)
+                            send_to_arduino("LED_GREEN_ON")
+                            
                             break
                     time.sleep(1)
-
-                send_final_data(10.00)
-                auto_drain_active = False; status_enabled = True; customer_cycle_running = False
-                return
+                break
 
             if not motor_close_triggered:
                 if abs(weight_live - last_weight) > 0.05: 
@@ -671,6 +678,17 @@ def customer_cycle():
         time.sleep(0.2)
     
     auto_drain_active = False; customer_cycle_running = False
+
+def tare_scale():
+    """Sends the tare command to the Uno to zero the scale."""
+    try:
+        if not isinstance(uno_ser, DummySerial):
+            uno_ser.write(b"t\n")
+            uno_ser.flush()
+            print("⚖️ Taring scale to 0.000 kg...")
+            time.sleep(0.5) # Give the Uno a moment to process the tare
+    except Exception as e:
+        print(f"❌ Failed to tare scale: {e}")
 
 def collector_cycle():
     global pin25_on, auto_off_timer
@@ -767,6 +785,8 @@ def main():
         TOKEN = wait_for_qr()
         machine_mode = "BUSY"
 
+        tare_scale()
+
         try:
             create_machine_audit({"qrToken": TOKEN, "machineId": machine_id, "action": "QR Scanned."})
             panel_type = send_qr_to_api(TOKEN)
@@ -780,18 +800,8 @@ def main():
                 continue
 
             if panel_type == "CUSTOMERPANEL":
-                mega_ser.reset_input_buffer()
-                mega_ser.write(b"get_led_status\n")
-                time.sleep(0.3)
-                led_status = mega_ser.readline().decode().strip()
-
-                if led_status == "LED_RED_ON":
-                    create_machine_audit({"qrToken": TOKEN, "machineId": machine_id, "action": "Customer cycle blocked"})
-                    send_to_arduino("LOCK")
-                    continue
-                else:
-                    create_machine_audit({"qrToken": TOKEN, "machineId": machine_id, "action": "Customer QR scanned"})
-                    customer_cycle()
+                create_machine_audit({"qrToken": TOKEN, "machineId": machine_id, "action": "Customer QR scanned"})
+                customer_cycle()
 
             elif panel_type == "COLLECTORPANEL":
                 create_machine_audit({"qrToken": TOKEN, "machineId": machine_id, "action": "Collector QR scanned"})
