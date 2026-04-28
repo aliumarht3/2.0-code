@@ -89,15 +89,6 @@ OVERFLOW_URL = "https://services.gohijau.org/api/Qr/overflow"
 TELEMETRY_URL = "https://gallows-qualm-dazzler.ngrok-free.dev/api/machine/telemetry"
 DIAGNOSTICS_URL = "https://gallows-qualm-dazzler.ngrok-free.dev/api/machine/diagnostics"
 
-# ------------------------------
-# ULTRASONIC WEIGHT FALLBACK CONSTANTS
-# ------------------------------
-# ⚠️ Calibrate these values based on the physical dimensions of the weighing tank
-US_TANK_EMPTY_CM = 30.0  # Distance read when the tank is completely empty
-US_TANK_FULL_CM = 10.0   # Distance read when the tank is at exactly 10kg
-US_MAX_CAPACITY_KG = 10.0
-
-
 TOKEN = None
 pin25_on = False  
 machine_id = "GO-000001" 
@@ -130,27 +121,6 @@ TURBIDITY_WATER_MAX = 200
 # ------------------------------
 # HARDWARE HELPERS
 # ------------------------------
-
-def get_us_weight_fallback():
-    """Polls the Mega for US distance and converts it to estimated Kg."""
-    resp = send_to_arduino("get_us_dist", timeout=0.4)
-    if resp and resp.startswith("us_dist:"):
-        try:
-            dist = float(resp.split(":")[1])
-            if dist <= 0: return None # Sensor missed the echo
-            if dist >= US_TANK_EMPTY_CM: return 0.0
-            if dist <= US_TANK_FULL_CM: return US_MAX_CAPACITY_KG
-            
-            # Linear mapping from distance to weight
-            cm_range = US_TANK_EMPTY_CM - US_TANK_FULL_CM
-            fill_cm = US_TANK_EMPTY_CM - dist
-            kg_per_cm = US_MAX_CAPACITY_KG / cm_range
-            
-            return round(fill_cm * kg_per_cm, 3)
-        except Exception as e:
-            print(f"❌ US parsing error: {e}")
-    return None
-
 def send_to_arduino(command, timeout=0.8):
     with mega_lock:
         try: mega_ser.reset_input_buffer()
@@ -621,65 +591,45 @@ def customer_cycle():
     while True:
         wd.kick()
         weight_live = get_weight_from_sensor()
-        us_weight = get_us_weight_fallback()
         
-        # 1. Determine Reliable Active Weight (Sensor Fusion)
-        active_weight = weight_live if weight_live is not None else 0.0
-        
-        if us_weight is not None:
-            # Fallback 1: Load cell reads near 0, but US detects significant oil
-            if active_weight < 0.2 and us_weight > 0.5:
-                active_weight = us_weight
-                print(f"⚠️ Load cell stall detected! Using US fallback: {active_weight} kg")
+        if weight_live is not None:
+            print(f"⚖️ Live weight while pouring: {weight_live} kg")
             
-            # Fallback 2: Safety override. If discrepancy is large, trust the higher value
-            elif abs(active_weight - us_weight) > 1.5:
-                active_weight = max(active_weight, us_weight)
-                print(f"⚠️ Large discrepancy! LC: {weight_live}kg | US: {us_weight}kg. Using {active_weight}kg")
-        
-        # 2. Check Auto-drain against the Active Weight
-        if active_weight is not None:
-            # print(f"⚖️ Live LC: {weight_live} kg | US Estimated: {us_weight} kg | ACTIVE: {active_weight} kg")
-            
-            if active_weight > 10.0:
+            if weight_live > 10.0:
                 auto_drain_active = True
-                create_machine_audit({"qrToken": TOKEN, "machineId": machine_id, "action": f"Auto-drain triggered at {active_weight}kg"})
+                create_machine_audit({"qrToken": TOKEN, "machineId": machine_id, "action": f"Auto-drain triggered at {weight_live}kg"})
                 send_to_arduino("LOCK")
                 time.sleep(0.30)
-                send_final_data(active_weight)
+                send_final_data(w)
                 send_to_arduino("excess_pump_start")
                 start_pump_safety_timer("normal")
 
                 while True:
                     wd.kick()
                     weight = get_weight_from_sensor()
-                    us_w = get_us_weight_fallback()
-                    
-                    drain_weight = weight if weight is not None else 0.0
-                    if us_w is not None and drain_weight < 0.2 and us_w > 0.5:
-                        drain_weight = us_w
-
-                    send_to_arduino(f"weight:{drain_weight}")
-                    
-                    if drain_weight <= 0.2 or pump_timeout_reached:
-                        create_machine_audit({"qrToken": TOKEN, "machineId": machine_id, "action": "Machine stopped pumping."})
-                        send_to_arduino("excess_pump_stop")
-                        stop_pump_safety_timer()
-                        send_to_arduino("LOCK")
-                        time.sleep(0.5)
-                        send_to_arduino("LED_GREEN_ON")
-                        break
+                    if weight is not None:
+                        # Send to mega just in case they update the arduino software in the future
+                        send_to_arduino(f"weight:{weight}")
+                        if weight <= 0.2 or pump_timeout_reached:
+                            create_machine_audit({"qrToken": TOKEN, "machineId": machine_id, "action": "Machine stopped pumping."})
+                            send_to_arduino("excess_pump_stop")
+                            stop_pump_safety_timer()
+                            send_to_arduino("LOCK")
+                            
+                            # NEW: Tell the Mega the machine is ready for the next user
+                            time.sleep(0.5)
+                            send_to_arduino("LED_GREEN_ON")
+                            
+                            break
                     time.sleep(1)
                 break
 
-            # 3. Handle Auto-door close logic
             if not motor_close_triggered:
-                if abs(active_weight - last_weight) > 0.05: 
-                    stable_time_start = time.time(); last_weight = active_weight
-                elif (time.time() - stable_time_start > 15 and active_weight >= MIN_POUR_WEIGHT) or (time.time() - start_time > 120):
+                if abs(weight_live - last_weight) > 0.05: 
+                    stable_time_start = time.time(); last_weight = weight_live
+                elif (time.time() - stable_time_start > 15 and weight_live >= MIN_POUR_WEIGHT) or (time.time() - start_time > 120):
                     send_to_arduino("AUTO_DOOR_CLOSE"); motor_close_triggered = True
 
-        # 4. Handle Mega Messages (Door Closed / Overflow)
         msg = mega_message_queue.pop(0) if mega_message_queue else (mega_ser.readline().decode(errors="ignore").strip() if mega_ser.in_waiting else None)
 
         if msg:
@@ -687,14 +637,8 @@ def customer_cycle():
                 if auto_drain_active: send_to_arduino("excess_pump_start"); time.sleep(0.2)
                 create_machine_audit({"qrToken": TOKEN, "machineId": machine_id, "action": "Machine door closed."})
                 
-                # Final check on both sensors
-                w_lc = get_weight_from_sensor()
-                w_us = get_us_weight_fallback()
-                
-                w = w_lc if w_lc is not None and w_lc > 0 else 0.0
-                if w < MIN_POUR_WEIGHT and w_us is not None and w_us >= MIN_POUR_WEIGHT:
-                    w = w_us
-                    print("⚠️ Submitting final transaction using Ultrasonic fallback.")
+                w = get_weight_from_sensor()
+                if w is None or w < 0: w = 0
                 
                 if w < MIN_POUR_WEIGHT:
                     create_machine_audit({"qrToken": TOKEN, "machineId": machine_id, "action": f"No oil poured ({w} kg) - Pump skipped"})
@@ -716,6 +660,7 @@ def customer_cycle():
                     wd.kick()
                     weight = get_weight_from_sensor()
                     if weight is not None:
+                        # Send to mega just in case they update the arduino software in the future
                         send_to_arduino(f"weight:{weight}")
                         if weight <= 0.2 or pump_timeout_reached:
                             create_machine_audit({"qrToken": TOKEN, "machineId": machine_id, "action": "Machine stopped pumping."})
@@ -725,13 +670,11 @@ def customer_cycle():
                             break
                     time.sleep(1)
                 break
-                
             elif msg.strip() == "overflow_confirmed":
                 create_machine_overflow({"token": TOKEN, "machineId": machine_id})
                 create_machine_audit({"qrToken": TOKEN, "machineId": machine_id, "action": f"Overflow Detected :{msg}"})
                 send_to_arduino("LOCK"); monitor_and_stop_pump()
                 break
-                
         time.sleep(0.2)
     
     auto_drain_active = False; customer_cycle_running = False
