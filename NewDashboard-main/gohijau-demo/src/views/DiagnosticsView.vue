@@ -158,14 +158,13 @@ const humanizeMap = {
 
 // UPDATED: Now checks status first, and uses our custom map even if backend action is empty
 const formatHumanAction = (log) => {
-  // Only show action text if the test actually failed
-  if (log.status !== 'FAIL' && log.status !== 'X') {
-    return "";
+  // If the test failed, show the humanized error or backend error
+  if (log.status === 'FAIL' || log.status === 'X' || log.status === '❌') {
+    return humanizeMap[log.component] || log.action || "Component failed check. Please inspect manually.";
   }
-  // Return mapped text OR backend text OR default fallback
-  return humanizeMap[log.component] || log.action || "Component failed check. Please inspect manually.";
+  // If it passes or is idle, return the backend action so we can see the sensor readings!
+  return log.action || ""; 
 };
-
 const onlineLogs = ref([
   { no: 1, type: 'Online', component: 'WiFi Connectivity', checking: 'WiFi connection status', status: 'Idle', action: '' },
   { no: 2, type: 'Online', component: 'Weighing Tank (Ultrasonic)', checking: 'Object depth / Ultrasonic reading', status: 'Idle', action: '' },

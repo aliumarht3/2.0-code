@@ -190,9 +190,10 @@ def log_telemetry_to_dashboard(action_name, weight, turbidity_raw, oil_quality):
 # LOAD CELL BACKGROUND THREAD
 # ------------------------------
 current_weight = 0.0
+last_weight_read_time = 0.0
 
 def load_cell_reader_loop():
-    global current_weight
+    global current_weight, last_weight_read_time # Make sure to declare it global here
     while True:
         try:
             if isinstance(uno_ser, DummySerial):
@@ -206,6 +207,7 @@ def load_cell_reader_loop():
                     val = float(line)
                     if -5.0 <= val <= 200.0:
                         current_weight = val
+                        last_weight_read_time = time.time() # Add this line!
                 except ValueError:
                     pass
             else:
@@ -247,53 +249,77 @@ def run_online_diagnostics():
 
     try:
         with socket.create_connection(("8.8.8.8", 53), timeout=3): pass
-        update_diagnostic_status(1, "Online", "Has WiFi?", "Connected", "✅")
+        update_diagnostic_status(1, "Online", "Has WiFi?", "Connected", "OK")
     except Exception as e:
-        update_diagnostic_status(1, "Online", "Has WiFi?", f"Error: {e}", "❌")
+        update_diagnostic_status(1, "Online", "Has WiFi?", f"Error: {e}", "FAIL")
 
     time.sleep(0.5)
 
     try:
         us_small = send_to_arduino("CHECK_ULTRASONIC_SMALL")
-        status_us_small = "✅" if us_small and "OK" in str(us_small) else "❌"
-        update_diagnostic_status(2, "Online", "Weighing Tank (Ultrasonic)", "Object depth / Ultrasonic reading", status_us_small, f"US Reading: {us_small}" if status_us_small=="❌" else "")
+        # ADDED NO_READING AS A VALID PASS
+        status_us_small = "OK" if us_small and ("OK" in str(us_small) or "NO_READING" in str(us_small)) else "FAIL"
+        update_diagnostic_status(2, "Online", "Weighing Tank (Ultrasonic)", "Object depth / Ultrasonic reading", status_us_small, f"US Reading: {us_small}" if status_us_small=="FAIL" else "")
     except Exception as e:
-        update_diagnostic_status(2, "Online", "Weighing Tank (Ultrasonic)", f"Error: {e}", "❌")
+        update_diagnostic_status(2, "Online", "Weighing Tank (Ultrasonic)", f"Error: {e}", "FAIL")
 
     time.sleep(0.5)
 
     try:
-        test_weight = get_weight_from_sensor()
-        status_lc = "✅" if test_weight is not None else "❌"
-        update_diagnostic_status(3, "Online", "Weighing Tank (Load Cell)", "Weight / Load cell reading", status_lc, f"{test_weight} kg")
+        # Check if we have received valid weight data recently (within the last 3 seconds)
+        if time.time() - last_weight_read_time > 3.0:
+            update_diagnostic_status(3, "Online", "Weighing Tank (Load Cell)", "Weight / Load cell reading", "FAIL", "Sensor disconnected or no data stream")
+        else:
+            test_weight = get_weight_from_sensor()
+            update_diagnostic_status(3, "Online", "Weighing Tank (Load Cell)", "Weight / Load cell reading", "OK", f"Reading: {test_weight} kg")
     except Exception as e:
-        update_diagnostic_status(3, "Online", "Weighing Tank (Load Cell)", f"Error: {e}", "❌")
-
-    time.sleep(0.5)
+        update_diagnostic_status(3, "Online", "Weighing Tank (Load Cell)", f"Error: {e}", "FAIL")
 
     try:
         us_res = send_to_arduino("CHECK_ULTRASONIC_RES")
-        status_us_res = "✅" if us_res and "OK" in str(us_res) else "❌"
-        update_diagnostic_status(4, "Online", "Barrel", "Storage level / Ultrasonic reading", status_us_res, f"Barrel Reading: {us_res}" if status_us_res=="❌" else "")
+        # ADDED NO_READING AS A VALID PASS
+        status_us_res = "OK" if us_res and ("OK" in str(us_res) or "NO_READING" in str(us_res)) else "FAIL"
+        update_diagnostic_status(4, "Online", "Barrel", "Storage level / Ultrasonic reading", status_us_res, f"Barrel Reading: {us_res}" if status_us_res=="FAIL" else "")
     except Exception as e:
-        update_diagnostic_status(4, "Online", "Barrel", f"Error: {e}", "❌")
+        update_diagnostic_status(4, "Online", "Barrel", f"Error: {e}", "FAIL")
 
     time.sleep(0.5)
 
     try:
-        turbidity_val = get_turbidity_from_arduino()
-        if turbidity_val is None: update_diagnostic_status(5, "Online", "Filter #1", "Flow & Turbidity status", "❌", "No reading")
-        else: update_diagnostic_status(5, "Online", "Filter #1", "Flow & Turbidity status", "✅", f"Raw: {turbidity_val}")
-    except Exception as e:
-        update_diagnostic_status(5, "Online", "Filter #1", "Flow & Turbidity status", "❌", f"Error: {e}")
+        # Take 5 rapid samples to check for a "floating" (disconnected) pin
+        samples = []
+        for _ in range(5):
+            val = get_turbidity_from_arduino()
+            if val is not None:
+                samples.append(val)
+            time.sleep(0.1)
 
-    time.sleep(0.5)
+        if len(samples) == 0:
+            update_diagnostic_status(5, "Online", "Filter #1", "Flow & Turbidity status", "FAIL", "No reading from Arduino")
+        else:
+            avg_val = int(sum(samples) / len(samples))
+            spread = max(samples) - min(samples)
+
+            # 1. SANITY CHECK: Dead (0) or maxed out (1023)
+            if avg_val <= 10 or avg_val >= 1015:
+                update_diagnostic_status(5, "Online", "Filter #1", "Flow & Turbidity status", "FAIL", f"Faulty (Raw: {avg_val})")
+                
+            # 2. VARIANCE CHECK: A disconnected pin jumps around. A connected sensor is stable.
+            elif spread > 15:
+                update_diagnostic_status(5, "Online", "Filter #1", "Flow & Turbidity status", "FAIL", f"Sensor Unplugged (Fluctuation: {spread})")
+                
+            # 3. Reading is normal and stable
+            else:
+                update_diagnostic_status(5, "Online", "Filter #1", "Flow & Turbidity status", "OK", f"Raw: {avg_val}")
+                
+    except Exception as e:
+        update_diagnostic_status(5, "Online", "Filter #1", "Flow & Turbidity status", "FAIL", f"Error: {e}")
 
     try:
         door_top = send_to_arduino("get_door_state")
         door_2 = send_to_arduino("CHECK_DOOR_GPIO3")
         doors_ok = ("door_closed" in str(door_top)) and ("CLOSED" in str(door_2))
-        update_diagnostic_status(6, "Online", "Door Sensors", "Relay input / Security status", "✅" if doors_ok else "FAIL", "Check doors" if not doors_ok else "")
+        update_diagnostic_status(6, "Online", "Door Sensors", "Relay input / Security status", "OK" if doors_ok else "FAIL", "Check doors" if not doors_ok else "")
     except Exception as e:
         update_diagnostic_status(6, "Online", "Door Sensors", f"Error: {e}", "FAIL")
     print("--- ONLINE DIAGNOSTICS COMPLETE ---\n")

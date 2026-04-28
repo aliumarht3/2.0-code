@@ -46,18 +46,6 @@ void loop() {
       rxBuf = ""; 
     }
 
-    // --- ADD THIS NEW BLOCK ---
-    // Physically verify the HX711 chip is connected and responsive
-    if (rxBuf.indexOf("CHECK_HX711") >= 0) {
-      if (scale.is_ready()) {
-        Serial.println("HX711_OK");
-      } else {
-        Serial.println("HX711_FAIL");
-      }
-      rxBuf = "";
-    }
-    // --------------------------
-
     // TARE command support
     if (c == 't' || c == 'T') {
       Serial.println("TARE_START");
