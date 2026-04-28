@@ -58,7 +58,7 @@
                   <span class="animate-pulse block h-5 w-5 bg-yellow-400 rounded-full shadow-sm border-2 border-yellow-500"></span>
                 </span>
                 
-                <svg v-else-if="log.status === 'X' || log.status === 'FAIL'" class="w-8 h-8 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg v-else-if="log.status === 'X' || log.status === 'FAIL' || log.status === '❌'" class="w-8 h-8 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M6 18L18 6M6 6l12 12"></path>
                 </svg>
 

@@ -314,8 +314,9 @@ def run_physical_diagnostics(component_name):
             send_to_arduino("DUMMY_WIPER_ON") 
             time.sleep(3); send_to_arduino("DUMMY_WIPER_OFF")
         elif component_name == "Door Motor":
-            send_to_arduino("DUMMY_DOOR_MOTOR_ON") 
-            time.sleep(3); send_to_arduino("DUMMY_DOOR_MOTOR_OFF")
+            send_to_arduino("AUTO_DOOR_OPEN") 
+            time.sleep(8)
+            send_to_arduino("AUTO_DOOR_CLOSE")
         elif component_name == "Valve":
             send_to_arduino("PIN25_ON")
             time.sleep(10); send_to_arduino("PIN25_OFF")
