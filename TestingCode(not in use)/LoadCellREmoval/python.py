@@ -73,6 +73,7 @@ door_off_timer = None
 try:
     mega_ser = serial.Serial('/dev/ttyACM0', 9600, timeout=1)
     print("✅ Serial connected successfully.")
+    time.sleep(2.5)
 except serial.SerialException as e:
     print(f"⚠️ Serial connection error: {e}")
     mega_ser = DummySerial()
@@ -303,7 +304,7 @@ hub_connection = (HubConnectionBuilder().with_url(hub_url).with_automatic_reconn
 
 def on_open():
     print("[CLIENT] ✅ Connected to server")
-    send_to_arduino("PYTHON_READY")
+    #send_to_arduino("PYTHON_READY")
     time.sleep(0.5); send_to_arduino("LED_GREEN_ON")
 
 def reconnect_forever():
@@ -707,6 +708,11 @@ def main():
     threading.Thread(target=internet_monitor_loop, daemon=True).start()
     threading.Thread(target=global_auto_drain_monitor, daemon=True).start()
     threading.Thread(target=send_status_loop, daemon=True).start()
+
+# --- ADD THIS BLOCK ---
+    print("🤝 Initiating Arduino Handshake...")
+    send_to_arduino("PYTHON_READY", timeout=2)
+    time.sleep(0.5)
 
     # Run diagnostics immediately on boot
     run_online_diagnostics()
