@@ -426,6 +426,16 @@ def send_final_data(oil_amount):
 def wait_for_qr():
     print("⏳ Waiting for QR scan...")
     scanned_str = ""
+    
+    # NEW: Flush any pending ghost/accidental scans from the buffer before waiting
+    if sys.platform == 'win32':
+        import msvcrt
+        while msvcrt.kbhit(): msvcrt.getwch()
+    else:
+        # Quickly read and discard any unread lines in the stdin buffer
+        while select.select([sys.stdin], [], [], 0)[0]:
+            sys.stdin.readline()
+
     if sys.platform == 'win32':
         import msvcrt
         while True:
@@ -434,11 +444,12 @@ def wait_for_qr():
             if msvcrt.kbhit():
                 char = msvcrt.getwche()
                 if char in ('\r', '\n'):
+                    if not scanned_str.strip(): continue # Ignore empty enter keys
                     if is_tech_door_open():
                         print("🚫 Tech door is OPEN. QR scan ignored.")
                         scanned_str = ""
                         continue
-                    return scanned_str
+                    return scanned_str.strip()
                 else: 
                     scanned_str += char
             time.sleep(0.1)
@@ -452,7 +463,6 @@ def wait_for_qr():
                 if scanned:
                     if is_tech_door_open():
                         print("🚫 Tech door is OPEN. QR scan ignored.")
-                        sys.stdin.flush()
                         continue
                     return scanned
             time.sleep(0.1)
@@ -760,15 +770,25 @@ def main():
         try:
             create_machine_audit({"qrToken": TOKEN, "machineId": machine_id, "action": "QR Scanned."})
             panel_type = send_qr_to_api(TOKEN)
-            if not panel_type: continue
+            
+            # NEW: Normalize the panel_type to avoid case-mismatch bugs
+            if panel_type and isinstance(panel_type, str):
+                panel_type = panel_type.strip().upper()
+
+            if not panel_type: 
+                print(f"⚠️ API rejected the QR token or returned empty. Token: {TOKEN}")
+                continue
 
             if panel_type == "CUSTOMERPANEL":
-                mega_ser.reset_input_buffer(); mega_ser.write(b"get_led_status\n"); time.sleep(0.3)
+                mega_ser.reset_input_buffer()
+                mega_ser.write(b"get_led_status\n")
+                time.sleep(0.3)
                 led_status = mega_ser.readline().decode().strip()
 
                 if led_status == "LED_RED_ON":
                     create_machine_audit({"qrToken": TOKEN, "machineId": machine_id, "action": "Customer cycle blocked"})
-                    send_to_arduino("LOCK"); continue
+                    send_to_arduino("LOCK")
+                    continue
                 else:
                     create_machine_audit({"qrToken": TOKEN, "machineId": machine_id, "action": "Customer QR scanned"})
                     customer_cycle()
@@ -781,6 +801,8 @@ def main():
                 create_machine_audit({"qrToken": TOKEN, "machineId": machine_id, "action": "Technician QR scanned"})
                 technician_cycle()
             else:
+                # NEW: Log what panel type actually caused the lock
+                print(f"⚠️ Unknown panel type received: '{panel_type}'. Locking doors.")
                 send_to_arduino("LOCK")
             time.sleep(2)
 
