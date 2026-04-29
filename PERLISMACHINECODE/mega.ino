@@ -38,20 +38,20 @@
 // -----------------------------
 // NEW WIPER MOTOR PINS
 // -----------------------------
-#define WIPER_R_EN 30
-#define WIPER_L_EN 31
-#define WIPER_RPWM 32
-#define WIPER_LPWM 33
+#define WIPER_R_EN 32
+#define WIPER_L_EN 33
+#define WIPER_RPWM 30
+#define WIPER_LPWM 31
 
 // -----------------------------
 // Constants
 // -----------------------------
 #define MAX_DISTANCE 200
-#define SMALL_TANK_THRESHOLD 8.5
+#define SMALL_TANK_THRESHOLD 5
 #define RESERVOIR_HIGH 20
 #define RESERVOIR_HIGH_HIGH 13
 #define JUNK_TANK_THRESHOLD 15  
-#define FINAL_WEIGHT_THRESHOLD 0.25
+#define FINAL_WEIGHT_THRESHOLD 0.2
 
 // -----------------------------
 // AUTO DOOR TUNING
@@ -206,15 +206,22 @@ void loop() {
     command.trim();
 
     if (command == "get_door_state") {
-        int raw = digitalRead(DOOR_SENSOR_TOP);
-        if (raw == LOW) Serial.println("door_closed");
+        int raw = digitalRead(DOOR_LIMIT_SWITCH);
+        if (raw == HIGH) Serial.println("door_closed");
         else Serial.println("door_opened");
         continue;   
     }
 
     // --- Telemetry Request from Python ---
     else if (command == "get_telemetry") {
-        int turbValue = analogRead(TURBIDITY_PIN);
+        // Average the turbidity over 10 samples
+        long turbSum = 0;
+        for(int i = 0; i < 10; i++) {
+            turbSum += analogRead(TURBIDITY_PIN);
+            delay(10);
+        }
+        int turbValue = turbSum / 10;
+        
         float junkDist = ultrasonicJunk.ping_cm();
         delay(35); 
         float resDist = ultrasonicRes.ping_cm();
@@ -366,12 +373,12 @@ void loop() {
     
     // --- NEW: REAL WIPER MOTOR COMMANDS ---
     else if (command == "START_WIPER_ROUTINE" || command == "WIPER_ON" || command == "DUMMY_WIPER_ON") { 
-      digitalWrite(WIPER_LPWM, LOW);
-      digitalWrite(WIPER_RPWM, HIGH);
+      digitalWrite(WIPER_LPWM, HIGH);
+      digitalWrite(WIPER_RPWM, LOW);
       Serial.println("WIPER_ON_ACK");
     }
     else if (command == "WIPER_OFF" || command == "DUMMY_WIPER_OFF") { 
-      digitalWrite(WIPER_RPWM, LOW);
+      digitalWrite(WIPER_RPWM, HIGH);
       digitalWrite(WIPER_LPWM, LOW);
       Serial.println("WIPER_OFF_ACK");
     }
@@ -391,9 +398,15 @@ void loop() {
     }
 
     else if (command == "get_turbidity") {
-      int turbidityRaw = analogRead(TURBIDITY_PIN);
-      Serial.print("turbidity:");
-      Serial.println(turbidityRaw);
+        // Average the turbidity here as well for individual checks
+        long turbSum = 0;
+        for(int i = 0; i < 10; i++) {
+            turbSum += analogRead(TURBIDITY_PIN);
+            delay(10);
+        }
+        int turbidityRaw = turbSum / 10;
+        Serial.print("turbidity:");
+        Serial.println(turbidityRaw);
     }
 
     // --- Gets smoothed distance of small tank for Python weight calculation ---
@@ -507,20 +520,12 @@ void loop() {
 
   // Active Pouring Hardware Safeguards
   if (pouringActive) {
-    if (smallDist > 0 && smallDist <= SMALL_TANK_THRESHOLD) {
-      Serial.println("overflow_small_tank");
-      pouringActive = false;
-      startAutoDoorClose();
-    }
-    if (resDist > 0) {
-      if (resDist <= RESERVOIR_HIGH_HIGH) {
-        Serial.println("overflow_res_high_high");
-        pouringActive = false;
-        startAutoDoorClose();
-      }
-    }
-    if (junkDist > 0 && junkDist <= JUNK_TANK_THRESHOLD) {
-      Serial.println("overflow_junk_tank");
+    // Instead of hair-trigger raw distances, use your debounced global flag 
+    // that requires 10 consecutive bad samples to ignore splashes.
+    if (globalOverflowDetected) {
+      // Send the exact string Python is looking for!
+      Serial.println("overflow_confirmed"); 
+      
       pouringActive = false;
       startAutoDoorClose();
     }

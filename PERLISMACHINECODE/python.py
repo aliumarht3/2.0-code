@@ -26,6 +26,7 @@ MANUAL_TESTS = {
     "door_lock_3": ("TEST_LOCK3_ON", "TEST_LOCK3_OFF", 5),
     "pump":        ("TEST_PUMP_ON",  "TEST_PUMP_OFF",  5),
     "valve":       ("TEST_VALVE_ON", "TEST_VALVE_OFF", 10),
+    "wiper":       ("WIPER_ON",      "WIPER_OFF",      25),
 }
 
 class Watchdog:
@@ -64,18 +65,18 @@ auto_off_timer = None
 
 try:
     mega_ser = serial.Serial('/dev/ttyACM0', 9600, timeout=1)
-    print("✅ Mega connected successfully.")
+    print("? Mega connected successfully.")
     time.sleep(2.5)
 except serial.SerialException as e:
-    print(f"❌ Mega connection error: {e}")
+    print(f"? Mega connection error: {e}")
     mega_ser = DummySerial()
 
 try:
     uno_ser = serial.Serial('/dev/ttyACM1', 9600, timeout=1)
-    print("✅ Uno (Load Cell) connected successfully.")
+    print("? Uno (Load Cell) connected successfully.")
     time.sleep(2.5)
 except serial.SerialException as e:
-    print(f"❌ Uno connection error: {e}")
+    print(f"? Uno connection error: {e}")
     uno_ser = DummySerial()
 
 # ------------------------------
@@ -106,7 +107,7 @@ pump_timer_lock = threading.Lock()
 
 alarm_monitor_active = False
 pump_timeout_reached = False
-MIN_POUR_WEIGHT = 0.100 # kg
+MIN_POUR_WEIGHT = 0.500 # kg
 
 mega_message_queue = []
 
@@ -167,7 +168,7 @@ def get_turbidity_from_arduino():
                     if line.startswith("turbidity:"):
                         return int(line.replace("turbidity:", "").strip())
             time.sleep(0.1)
-    except Exception as e: print(f"❌ Turbidity read error: {e}")
+    except Exception as e: print(f"? Turbidity read error: {e}")
     return None
 
 def log_telemetry_to_dashboard(action_name, weight, turbidity_raw, oil_quality):
@@ -184,7 +185,70 @@ def log_telemetry_to_dashboard(action_name, weight, turbidity_raw, oil_quality):
     try:
         threading.Thread(target=requests.post, args=(TELEMETRY_URL,), kwargs={"json": payload, "timeout": 5}, daemon=True).start()
     except Exception as e:
-        print(f"❌ Dashboard log thread failed: {e}")
+        print(f"? Dashboard log thread failed: {e}")
+
+# ------------------------------
+# LIVE TELEMETRY & TANK MATH
+# ------------------------------
+def calculate_tank_liters(distance_cm):
+    TANK_LENGTH_CM = 95.0
+    TANK_WIDTH_CM = 74.0
+    TANK_HEIGHT_CM = 110.0
+    
+    # Constrain the distance bounds
+    if distance_cm < 0: distance_cm = 0
+    if distance_cm > TANK_HEIGHT_CM: distance_cm = TANK_HEIGHT_CM
+        
+    oil_height = TANK_HEIGHT_CM - distance_cm
+    volume_cm3 = TANK_LENGTH_CM * TANK_WIDTH_CM * oil_height
+    liters = volume_cm3 / 1000.0
+    return round(liters, 2)
+
+def get_live_telemetry():
+    try:
+        with mega_lock:
+            mega_ser.reset_input_buffer()
+            mega_ser.write(b"get_telemetry\n")
+            mega_ser.flush()
+        time.sleep(0.2)
+        for _ in range(5):
+            with mega_lock:
+                if mega_ser.in_waiting:
+                    line = mega_ser.readline().decode(errors="ignore").strip()
+                    if line.startswith("telemetry:"):
+                        parts = line.replace("telemetry:", "").split(',')
+                        if len(parts) >= 3:
+                            return int(parts[0]), float(parts[1]), float(parts[2])
+            time.sleep(0.1)
+    except Exception as e:
+        pass
+    return None, None, None
+
+def telemetry_stream_loop():
+    while True:
+        try:
+            # Prevent interrupting active hardware commands
+            if machine_mode == "IDLE" and not manual_test_running:
+                turb, junk_dist, res_dist = get_live_telemetry()
+                
+                if turb is not None:
+                    liters = calculate_tank_liters(res_dist)
+                    
+                    payload = {
+                        "machineId": machine_id,
+                        "timestamp": time.time(),
+                        "event": "Live Telemetry Update",
+                        "metrics": {
+                            "mainTankVolumeLiters": liters,
+                            "turbidityValue": turb,
+                            "junkTankDistanceCm": round(junk_dist, 1)
+                        }
+                    }
+                    requests.post(TELEMETRY_URL, json=payload, timeout=5)
+        except Exception as e:
+            print(f"? Live Telemetry stream error: {e}")
+            
+        time.sleep(5) # Stream updates every 5 seconds
 
 # ------------------------------
 # LOAD CELL BACKGROUND THREAD
@@ -225,16 +289,16 @@ def update_diagnostic_status(log_no, log_type, component, checking, status, acti
     payload = {"MachineId": machine_id, "Timestamp": time.time(), "No": log_no, "Type": log_type, "Component": component, "Checking": checking, "Status": status, "Action": action}
     headers = {"Content-Type": "application/json", "ngrok-skip-browser-warning": "true"}
     try: requests.post(DIAGNOSTICS_URL, json=payload, headers=headers, timeout=3)
-    except Exception as e: print(f"❌ Failed to update diagnostic status for {component}: {e}")
+    except Exception as e: print(f"? Failed to update diagnostic status for {component}: {e}")
 
 def publish_manual_test_status(test_name, status):
-    mapping = {"door_lock_1": "Door Lock", "door_lock_2": "Door Lock", "door_lock_3": "Door Lock", "pump": "Pump", "valve": "Valve"}
+    mapping = {"door_lock_1": "Door Lock", "door_lock_2": "Door Lock", "door_lock_3": "Door Lock", "pump": "Pump", "valve": "Valve", "wiper": "Wiper Motor"}
     comp_name = mapping.get(test_name, test_name)
-    ui_status = "✅" if status == "DONE" else ("IN_PROGRESS" if status == "RUNNING" else "❌")
+    ui_status = "?" if status == "DONE" else ("IN_PROGRESS" if status == "RUNNING" else "?")
     update_diagnostic_status(0, "Physical", comp_name, f"Manual Test: {status}", ui_status)
 
 def run_online_diagnostics():
-    print("\n--- 🔍 STARTED ONLINE DIAGNOSTICS ---")
+    print("\n--- ? STARTED ONLINE DIAGNOSTICS ---")
     tests = [
         {"no": 1, "comp": "Has WiFi?", "chk": "Connecting to 8.8.8.8:53"},
         {"no": 2, "comp": "Weighing Tank (Ultrasonic)", "chk": "Object depth / Ultrasonic reading"},
@@ -335,10 +399,10 @@ def run_physical_diagnostics(component_name):
             time.sleep(5); send_to_arduino("excess_pump_stop")
         elif component_name == "Door Lock":
             send_to_arduino("unlock_tech")
-            time.sleep(5); send_to_arduino("LOCK")
+            time.sleep(10); send_to_arduino("LOCK")
         elif component_name == "Wiper Motor":
             send_to_arduino("DUMMY_WIPER_ON") 
-            time.sleep(3); send_to_arduino("DUMMY_WIPER_OFF")
+            time.sleep(25); send_to_arduino("DUMMY_WIPER_OFF")
         elif component_name == "Door Motor":
             send_to_arduino("AUTO_DOOR_OPEN") 
             time.sleep(8)
@@ -346,7 +410,7 @@ def run_physical_diagnostics(component_name):
         elif component_name == "Valve":
             send_to_arduino("PIN25_ON")
             time.sleep(10); send_to_arduino("PIN25_OFF")
-    except Exception as e: print(f"❌ Error testing {component_name}: {e}")
+    except Exception as e: print(f"? Error testing {component_name}: {e}")
     finally:
         manual_test_running = False
         machine_mode = "IDLE"
@@ -366,7 +430,7 @@ hub_url = f"https://gallows-qualm-dazzler.ngrok-free.dev/machineHub?machineId={m
 hub_connection = (HubConnectionBuilder().with_url(hub_url).with_automatic_reconnect({"type": "raw", "keep_alive_interval": 10, "reconnect_interval": 5, "max_attempts": 5}).configure_logging(logging.INFO).build())
 
 def on_open():
-    print("[CLIENT] ✅ Connected to server")
+    print("[CLIENT] ? Connected to server")
     time.sleep(0.5); send_to_arduino("LED_GREEN_ON")
 
 def reconnect_forever():
@@ -384,8 +448,22 @@ def on_receive_command(command):
         requests.post(FINAL_COLLECTOR_SUBMIT_URL , json={"token": TOKEN, "machineId":machine_id}, timeout=5)
     elif cmd.startswith("ManualTest"):
         test_name = cmd.replace("ManualTest", "").lower()
-        if test_name == "doorlock1": trigger_manual_physical_test("door_lock_1")
-        elif test_name == "pump": trigger_manual_physical_test("pump")
+        
+        # Map incoming SignalR commands to your MANUAL_TESTS dictionary keys
+        test_mapping = {
+            "doorlock1": "door_lock_1",
+            "doorlock2": "door_lock_2",
+            "doorlock3": "door_lock_3",
+            "pump": "pump",
+            "valve": "valve",
+            "wiper": "wiper",
+            "wipermotor": "wiper"
+        }
+        
+        if test_name in test_mapping:
+            trigger_manual_physical_test(test_mapping[test_name])
+        else:
+            print(f"⚠️ Unknown manual test requested by server: {test_name}")
 
 def _manual_test_worker(test_name):
     global manual_test_running, machine_mode
@@ -450,7 +528,7 @@ def send_final_data(oil_amount):
 # QR HANDLING
 # ------------------------------
 def wait_for_qr():
-    print("⏳ Waiting for QR scan...")
+    print("? Waiting for QR scan...")
     scanned_str = ""
     
     # NEW: Flush any pending ghost/accidental scans from the buffer before waiting
@@ -472,7 +550,7 @@ def wait_for_qr():
                 if char in ('\r', '\n'):
                     if not scanned_str.strip(): continue # Ignore empty enter keys
                     if is_tech_door_open():
-                        print("🚫 Tech door is OPEN. QR scan ignored.")
+                        print("? Tech door is OPEN. QR scan ignored.")
                         scanned_str = ""
                         continue
                     return scanned_str.strip()
@@ -488,7 +566,7 @@ def wait_for_qr():
                 scanned = sys.stdin.readline().strip()
                 if scanned:
                     if is_tech_door_open():
-                        print("🚫 Tech door is OPEN. QR scan ignored.")
+                        print("? Tech door is OPEN. QR scan ignored.")
                         continue
                     return scanned
             time.sleep(0.1)
@@ -496,6 +574,8 @@ def wait_for_qr():
 def send_qr_to_api(qr_token):
     global TOKEN
     payload = {"token": qr_token, "machineId": machine_id}
+
+    
     try:
         wd.kick()
         response = requests.post(QR_VALIDATE_URL, json=payload, headers={'Content-Type': 'application/json'}, timeout=5)
@@ -560,7 +640,7 @@ def run_global_auto_drain():
         while True:
             wd.kick()
             w = get_weight_from_sensor()
-            if w <= 0.25 or pump_timeout_reached:
+            if w <= 0.2 or pump_timeout_reached:
                 send_to_arduino("excess_pump_stop"); stop_pump_safety_timer(); send_to_arduino("LOCK"); break
             try: send_to_arduino(f"weight:{w}")
             except: pass
@@ -586,7 +666,7 @@ def global_auto_drain_monitor():
 def customer_cycle():
     global status_enabled, auto_drain_active, customer_cycle_running
     customer_cycle_running = True
-    print("🚀 Starting customer cycle...")
+    print("? Starting customer cycle...")
     
     send_to_arduino("unlock")
     create_machine_audit({"qrToken": TOKEN, "machineId": machine_id, "action": "Customer verified - Top door unlock"})
@@ -619,7 +699,7 @@ def customer_cycle():
         weight_live = get_weight_from_sensor()
         
         if weight_live is not None:
-            print(f"⚖️ Live weight while pouring: {weight_live} kg")
+            print(f"?? Live weight while pouring: {weight_live} kg")
             
             if weight_live > 10.0:
                 auto_drain_active = True
@@ -651,7 +731,7 @@ def customer_cycle():
                 break
 
             if not motor_close_triggered:
-                if abs(weight_live - last_weight) > 0.05: 
+                if abs(weight_live - last_weight) > 0.01: 
                     stable_time_start = time.time(); last_weight = weight_live
                 elif (time.time() - stable_time_start > 15 and weight_live >= MIN_POUR_WEIGHT) or (time.time() - start_time > 120):
                     send_to_arduino("AUTO_DOOR_CLOSE"); motor_close_triggered = True
@@ -711,10 +791,10 @@ def tare_scale():
         if not isinstance(uno_ser, DummySerial):
             uno_ser.write(b"t\n")
             uno_ser.flush()
-            print("⚖️ Taring scale to 0.000 kg...")
+            print("?? Taring scale to 0.000 kg...")
             time.sleep(0.5) # Give the Uno a moment to process the tare
     except Exception as e:
-        print(f"❌ Failed to tare scale: {e}")
+        print(f"? Failed to tare scale: {e}")
 
 def collector_cycle():
     global pin25_on, auto_off_timer
@@ -755,7 +835,7 @@ def main():
     # START ONLY THE LOAD CELL READER THREAD (Safe to run early)
     threading.Thread(target=load_cell_reader_loop, daemon=True).start()
 
-    print("🔌 Initiating Arduino Handshake...")
+    print("? Initiating Arduino Handshake...")
     connected = False
     
     # Send handshake to Uno
@@ -785,7 +865,7 @@ def main():
             time.sleep(0.1)
             
         if not connected:
-            print("⏳ Waiting for Mega safety boot sequence to finish...")
+            print("? Waiting for Mega safety boot sequence to finish...")
 
     time.sleep(0.5)
 
@@ -795,6 +875,7 @@ def main():
     threading.Thread(target=internet_monitor_loop, daemon=True).start()
     threading.Thread(target=global_auto_drain_monitor, daemon=True).start()
     threading.Thread(target=send_status_loop, daemon=True).start()
+    threading.Thread(target=telemetry_stream_loop, daemon=True).start()
 
     # Start SignalR Server Connection
     try: hub_connection.start()
@@ -822,7 +903,7 @@ def main():
                 panel_type = panel_type.strip().upper()
 
             if not panel_type: 
-                print(f"⚠️ API rejected the QR token or returned empty. Token: {TOKEN}")
+                print(f"?? API rejected the QR token or returned empty. Token: {TOKEN}")
                 continue
 
             if panel_type == "CUSTOMERPANEL":
@@ -838,7 +919,7 @@ def main():
                 technician_cycle()
             else:
                 # NEW: Log what panel type actually caused the lock
-                print(f"⚠️ Unknown panel type received: '{panel_type}'. Locking doors.")
+                print(f"?? Unknown panel type received: '{panel_type}'. Locking doors.")
                 send_to_arduino("LOCK")
             time.sleep(2)
 
@@ -852,7 +933,7 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n⏹️ Program stopped by user.")
+        print("\n?? Program stopped by user.")
         try: mega_ser.close()
         except: pass
         try: uno_ser.close()
